@@ -12,11 +12,12 @@ from typing import Any
 
 from ..models import Job, Profile, slugify
 from ..matching.jd import JD, parse_jd
-from ..matching.skills import GRAPH_PATH, SkillGraph
+from ..matching.skills import GRAPH_PATH, SkillGraph, extract_skills
 from .ats_check import ats_check
 from .llm import COVER_LETTER_SYSTEM, GROUNDING_SYSTEM, LLMClient
 
 TEMPLATE = Path(__file__).with_name("template.typ")
+COMPACT_TEMPLATE = Path(__file__).with_name("template_compact.typ")
 NUMBER = re.compile(r"\b\d[\d,.]*\b")
 STOPWORDS = {
     "the", "and", "for", "with", "that", "this", "from", "your", "you", "our", "are", "will",
@@ -77,6 +78,104 @@ def select_facts(profile: Profile, jd: JD, max_per_entry: int = 4) -> tuple[list
 
     selected.sort(key=lambda x: x["_index"])
     return selected, [str(f.get("id", "")) for f in selected if f.get("id")]
+
+
+DOMAIN_KEYWORDS = {
+    "systems": {
+        "systems", "distributed", "distributed-systems", "query engine", "database",
+        "storage", "compiler", "low-level", "embedded", "hpc", "performance",
+        "latency", "networking", "operating systems", "c++", "rust",
+    },
+    "data": {
+        "data", "data-engineering", "etl", "pipeline", "sql", "spark", "analytics",
+        "warehouse", "data-quality", "data structures",
+    },
+    "ai": {
+        "ai", "ml", "llm", "machine learning", "deep learning", "agent", "agentic",
+        "rag", "nlp", "pytorch", "inference", "model", "computer-vision",
+    },
+    "security": {
+        "security", "iam", "identity", "access-control", "compliance", "auth",
+        "rbac", "policy", "cryptography",
+    },
+    "fullstack": {
+        "full-stack", "frontend", "backend", "react", "typescript", "javascript",
+        "web", "api", "product", "rest",
+    },
+    "cloud": {
+        "cloud", "infrastructure", "devops", "kubernetes", "docker", "aws", "gcp",
+        "azure", "platform", "serverless",
+    },
+}
+
+
+def _text_domains(text: str) -> set[str]:
+    lowered = (text or "").lower()
+
+    def has(keyword: str) -> bool:
+        if len(keyword) <= 3:
+            return re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", lowered) is not None
+        return keyword in lowered
+
+    return {
+        domain
+        for domain, keywords in DOMAIN_KEYWORDS.items()
+        if any(has(keyword) for keyword in keywords)
+    }
+
+
+def select_projects(profile: Profile, jd: JD, max_projects: int = 3) -> list[dict[str, Any]]:
+    """Choose the most JD-relevant projects while preserving profile order.
+
+    A parsed resume usually contains three projects. The resume-forge project
+    bank can contain a dozen or more, so rendering every project would produce a
+    multi-page resume. Score tags, tech lines, best-for labels, and bullets
+    against the JD, then keep the top N.
+    """
+    if len(profile.projects) <= max_projects:
+        return list(profile.projects)
+
+    jd_terms = set(jd.skills) | set(jd.must_skills) | _keywords(jd.description)
+    jd_skills = set(jd.skills) | set(jd.must_skills)
+    must = set(jd.must_skills)
+    jd_domains = _text_domains(" ".join([*jd.skills, *jd.must_skills]))
+    title_domains = _text_domains(jd.title)
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for index, project in enumerate(profile.projects):
+        text = " ".join(
+            str(project.get(key, "") or "")
+            for key in ("name", "title", "company", "description", "tech_line")
+        )
+        for key in ("tags", "best_for", "bullets"):
+            text += " " + " ".join(str(item) for item in project.get(key, []) or [])
+        skills = set(extract_skills(text))
+        signals = _keywords(
+            " ".join(
+                str(item)
+                for key in ("tags", "best_for", "tech_line")
+                for item in (project.get(key, []) or [])
+            )
+        )
+        project_domains = _text_domains(
+            " ".join(
+                str(item)
+                for key in ("tags", "best_for", "tech_line")
+                for item in (project.get(key, []) or [])
+            )
+        )
+        # Technical skills dominate; domain labels then generic prose overlap.
+        score = (
+            5 * len(skills & jd_skills)
+            + 3 * len(skills & must)
+            + 8 * len(project_domains & title_domains)
+            + 4 * len(project_domains & jd_domains)
+            + min(3, len(signals & jd_terms))
+        )
+        scored.append((score, index, project))
+
+    chosen = sorted(scored, key=lambda item: (-item[0], item[1]))[:max_projects]
+    chosen_indices = {index for _, index, _ in chosen}
+    return [project for index, project in enumerate(profile.projects) if index in chosen_indices]
 
 
 def ordered_skills(profile: Profile, jd: JD) -> list[str]:
@@ -144,7 +243,7 @@ def build_data(profile: Profile, jd: JD, selected: list[dict[str, Any]], summary
         )
 
     projects = []
-    for entry in profile.projects:
+    for entry in select_projects(profile, jd):
         key = (str(entry.get("title", "")), str(entry.get("company", "")), "projects")
         bullets = [f["text"] for f in selected_by_entry.get(key, [])]
         if not bullets:
@@ -152,7 +251,7 @@ def build_data(profile: Profile, jd: JD, selected: list[dict[str, Any]], summary
         projects.append(
             {
                 "name": entry.get("title", "") or entry.get("name", ""),
-                "description": entry.get("company", ""),
+                "description": entry.get("description", "") or entry.get("company", ""),
                 "bullets": bullets,
             }
         )
@@ -181,7 +280,7 @@ def build_data(profile: Profile, jd: JD, selected: list[dict[str, Any]], summary
         "projects": projects,
         "education": education,
         "certifications": certifications,
-        "skills": ordered_skills(profile, jd),
+        "skills": ordered_skills(profile, jd)[:24],
     }
 
 
@@ -242,13 +341,13 @@ def cover_letter(profile: Profile, job: Job, jd: JD, llm: LLMClient | None) -> s
     )
 
 
-def render(data: dict[str, Any], out_dir: Path) -> tuple[Path, Path, Path]:
+def render(data: dict[str, Any], out_dir: Path, template: Path = TEMPLATE) -> tuple[Path, Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     data_path = out_dir / "data.json"
     typ_path = out_dir / "resume.typ"
     pdf_path = out_dir / "resume.pdf"
     data_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    shutil.copyfile(TEMPLATE, typ_path)
+    shutil.copyfile(template, typ_path)
     result = subprocess.run(
         ["typst", "compile", str(typ_path.name), str(pdf_path.name)],
         cwd=out_dir,
@@ -269,11 +368,12 @@ def tailor_resume(
     write_cover_letter: bool = True,
 ) -> TailorResult:
     jd = parse_jd(job.description or job.title, title_hint=job.title, company_hint=job.company, location_hint=job.location)
-    selected, fact_ids = select_facts(profile, jd)
+    selected, fact_ids = select_facts(profile, jd, max_per_entry=4)
     summary = summarize(profile, job, jd, llm)
     data = build_data(profile, jd, selected, summary=summary)
     out_dir = Path(output_root) / slugify(job.company) / slugify(job.title, 60)
-    pdf_path, typ_path, data_path = render(data, out_dir)
+    template = COMPACT_TEMPLATE if len(profile.projects) > 3 else TEMPLATE
+    pdf_path, typ_path, data_path = render(data, out_dir, template=template)
 
     cover_path = ""
     if write_cover_letter:

@@ -12,6 +12,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+import yaml
+
 from . import db, quality, services
 from .config import load_config
 from .email.code_bridge import redact_code, redact_code_in_text
@@ -511,9 +513,67 @@ def cmd_import_profile(args) -> int:
         from .matching.resume import load_profile_file
 
         profile = load_profile_file(path)
-        profile.id = db.save_profile(conn, profile)
-        db.set_active_profile(conn, profile.id)
+    profile.id = db.save_profile(conn, profile)
+    db.set_active_profile(conn, profile.id)
     print(f"Imported profile {profile.id}: {profile.full_name or profile.name}")
+    return 0
+
+
+def cmd_import_resume_forge(args) -> int:
+    cfg, conn = _connect(args)
+    from .integrations.resume_forge import (
+        import_applications,
+        load_network,
+        load_profile,
+        preferences_from_profile,
+    )
+
+    profile_data = yaml.safe_load(Path(args.profile).read_text(encoding="utf-8")) or {}
+    profile = load_profile(
+        args.profile,
+        projects_path=args.projects,
+        evidence_path=args.evidence,
+        resume_path=args.resume or "",
+    )
+    email_override = getattr(args, "email", None)
+    if email_override:
+        profile.email = email_override
+    profile.id = db.save_profile(conn, profile)
+    db.set_active_profile(conn, profile.id)
+    db.save_preferences(conn, profile.id, preferences_from_profile(profile_data))
+
+    summary: dict[str, object] = {
+        "profile_id": profile.id,
+        "name": profile.full_name or profile.name,
+        "experience": len(profile.experience),
+        "projects": len(profile.projects),
+        "facts": len(profile.facts),
+        "skills": len(profile.skills),
+    }
+
+    if args.network:
+        network_path = cfg.data_dir / "network.yml"
+        if network_path.exists() and not args.force_network:
+            summary["network"] = f"exists, skipped: {network_path}"
+        else:
+            network = load_network(args.network)
+            network_path.write_text(yaml.safe_dump(network, sort_keys=False), encoding="utf-8")
+            try:
+                network_path.chmod(0o600)
+            except OSError:
+                pass
+            summary["network"] = f"{len(network.get('connections', []))} connections -> {network_path}"
+
+    if args.applications:
+        summary["applications"] = import_applications(
+            conn,
+            profile.id,
+            args.applications,
+            include_unstarted=args.include_unstarted,
+        )
+
+    db.log_event(conn, None, "resume_forge_import", str(args.profile))
+    _print(summary)
     return 0
 
 
@@ -637,6 +697,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("import-profile", help="import a resume or profile YAML/JSON")
     p.add_argument("--file", required=True)
     p.set_defaults(func=cmd_import_profile)
+
+    p = sub.add_parser("import-resume-forge", help="import a resume-forge profile/projects/evidence/tracker")
+    p.add_argument("--profile", required=True, help="resume-forge profile.yml")
+    p.add_argument("--projects", help="resume-forge projects.yml")
+    p.add_argument("--evidence", help="resume-forge evidence_matrix.yml")
+    p.add_argument("--network", help="resume-forge network.yml")
+    p.add_argument("--applications", help="resume-forge applications.yml")
+    p.add_argument("--resume", help="base resume PDF; its curated bullets are preferred")
+    p.add_argument("--email", help="override the candidate email in the resume header")
+    p.add_argument("--include-unstarted", action="store_true", help="also import Not Started tracker rows")
+    p.add_argument("--force-network", action="store_true", help="overwrite data/network.yml")
+    p.set_defaults(func=cmd_import_resume_forge)
 
     p = sub.add_parser("app", help="start the dashboard and open it in a browser")
     p.add_argument("--host")

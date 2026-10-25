@@ -68,3 +68,78 @@ def test_render_and_ats_check(tmp_path: Path):
     assert result["pages"] == 1
     assert result["chars"] > 200
     assert result["images"] == 0
+
+
+@pytest.mark.skipif(shutil.which("typst") is None, reason="typst not installed")
+def test_project_bank_uses_compact_template_and_stays_one_page(tmp_path: Path):
+    from jobforge.tailoring.tailor import tailor_resume
+
+    profile = Profile(
+        id=1,
+        first_name="Jane",
+        last_name="Doe",
+        email="jane@example.com",
+        phone="+1 555 123 4567",
+        location="New York, NY",
+        skills=["Python", "FastAPI", "Docker", "Rust", "C++"],
+        experience=[
+            {
+                "title": "Software Engineer",
+                "company": "Acme",
+                "location": "New York, NY",
+                "start": "2024",
+                "end": "Present",
+                "bullets": ["Built a Python API", "Shipped a Docker deployment", "Added tests"],
+            }
+        ],
+        projects=[
+            {
+                "title": f"Project {index}",
+                "name": f"Project {index}",
+                "description": tech,
+                "tags": tags,
+                "best_for": best_for,
+                "bullets": [f"Built {tech}."],
+            }
+            for index, (tech, tags, best_for) in enumerate(
+                [
+                    ("Python, FastAPI", ["Python", "FastAPI"], ["backend"]),
+                    ("C++, SIMD", ["C++", "systems"], ["systems"]),
+                    ("Rust", ["Rust", "systems"], ["systems"]),
+                    ("React", ["React", "frontend"], ["frontend"]),
+                ],
+                start=1,
+            )
+        ],
+        facts=[
+            {
+                "id": f"fact-{index:03d}",
+                "section": "projects",
+                "title": f"Project {index}",
+                "company": "",
+                "text": f"Built Project {index}.",
+                "skills": tags,
+            }
+            for index, (_tech, tags, _best_for) in enumerate(
+                [
+                    ("Python, FastAPI", ["Python", "FastAPI"], ["backend"]),
+                    ("C++, SIMD", ["C++", "systems"], ["systems"]),
+                    ("Rust", ["Rust", "systems"], ["systems"]),
+                    ("React", ["React", "frontend"], ["frontend"]),
+                ],
+                start=1,
+            )
+        ],
+    )
+    job = Job(
+        source="lever",
+        source_id="compact-1",
+        company="Acme",
+        title="Systems Engineer",
+        description="Requirements: C++, Rust, distributed systems, Python.",
+    )
+
+    result = tailor_resume(profile, job, tmp_path)
+
+    assert "0.12in" in Path(result.typ_path).read_text(encoding="utf-8")
+    assert result.ats["pages"] == 1

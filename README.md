@@ -68,7 +68,7 @@ uv tool install --from git+ssh://git@github.com/Taf0711/jobforge.git jobforge
 For a reproducible release, pin the tag:
 
 ```bash
-uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.1.0" jobforge
+uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.2.0" jobforge
 ```
 
 `jobforge setup` writes config, data, output, and browser state under a per-user
@@ -120,6 +120,23 @@ jobforge app
 4. `score` fills the match table.
 5. Open a job → **Tailor resume** → **Fill application**.
 
+### Already using resume-forge?
+
+Import the verified profile, project bank, evidence matrix, network, and tracker
+instead of re-parsing a PDF:
+
+```bash
+jobforge import-resume-forge \
+  --profile  /path/to/profile.yml \
+  --projects /path/to/projects.yml \
+  --evidence /path/to/evidence_matrix.yml \
+  --network  /path/to/network.yml \
+  --applications /path/to/applications.yml \
+  --resume   /path/to/base_resume.pdf
+```
+
+See `docs/16-resume-forge.md` for the mapping and status conversion.
+
 ## Commands
 
 ```bash
@@ -128,6 +145,7 @@ jobforge setup            # first-run config + browser
 jobforge doctor           # check paths, Typst, and browser
 jobforge init
 jobforge import-profile --file resume.pdf
+jobforge import-resume-forge --profile profile.yml --projects projects.yml
 jobforge scan
 jobforge scan --source greenhouse --board stripe
 jobforge scan --url https://jobs.lever.co/acme/123
@@ -252,6 +270,7 @@ docs/
   12-quality.md        pre-submit quality gate
   13-risk-consent.md   explicit opt-in risk policy
   15-packaging.md      install, app home, release build
+  16-resume-forge.md   import the personal verified profile/projects/tracker
 ```
 
 ## Tests

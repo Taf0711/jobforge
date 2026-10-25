@@ -55,8 +55,8 @@ jobforge serve              # server only, no browser
 
 ```bash
 uv build
-# dist/jobforge-0.1.0-py3-none-any.whl
-# dist/jobforge-0.1.0.tar.gz
+# dist/jobforge-0.2.0-py3-none-any.whl
+# dist/jobforge-0.2.0.tar.gz
 ```
 
 The wheel packages:
@@ -90,3 +90,30 @@ Before publishing a repository:
 4. Run `pytest`, `jobforge audit`, the adapter eval, and the e2e smoke.
 5. Rebuild the wheel and test `uv tool install --from <repo> jobforge` in a clean
    tool directory before sharing the link.
+
+## Public release process (maintainer)
+
+The public repo is `Taf0711/jobforge`; the private development repo is
+`Taf0711/jobforge-dev`. Do not push internal plans, review artifacts, worktree
+notes, or the third-party teardown to the public repo.
+
+```bash
+# 1. Export a clean tree (excludes internal docs and rewrites local paths)
+scripts/export_public.sh /tmp/jobforge-public
+
+# 2. Verify the export
+cd /tmp/jobforge-public
+.venv/bin/python -m pytest -q   # use the dev venv if needed
+uv build
+unzip -l dist/*.whl | grep 'jobforge/data'
+
+# 3. Publish it
+git add -A && git commit -m "Release vX.Y.Z"
+git push origin main
+git tag -a vX.Y.Z -m "JobForge X.Y.Z"
+git push origin vX.Y.Z
+gh release create vX.Y.Z dist/*.whl dist/*.tar.gz
+```
+
+Keep the private repo as the source of truth; the public repo is a release
+export.
