@@ -564,6 +564,16 @@ def cmd_import_resume_forge(args) -> int:
                 pass
             summary["network"] = f"{len(network.get('connections', []))} connections -> {network_path}"
 
+    archetypes_arg = getattr(args, "archetypes", None)
+    if archetypes_arg:
+        archetype_path = cfg.data_dir / "role_archetypes.yml"
+        archetype_path.write_text(Path(archetypes_arg).read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            archetype_path.chmod(0o600)
+        except OSError:
+            pass
+        summary["archetypes"] = str(archetype_path)
+
     if args.applications:
         summary["applications"] = import_applications(
             conn,
@@ -703,6 +713,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--projects", help="resume-forge projects.yml")
     p.add_argument("--evidence", help="resume-forge evidence_matrix.yml")
     p.add_argument("--network", help="resume-forge network.yml")
+    p.add_argument("--archetypes", help="resume-forge role_archetypes.yml")
     p.add_argument("--applications", help="resume-forge applications.yml")
     p.add_argument("--resume", help="base resume PDF; its curated bullets are preferred")
     p.add_argument("--email", help="override the candidate email in the resume header")

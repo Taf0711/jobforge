@@ -31,6 +31,9 @@ BULLET = re.compile(r"^\s*(?:[•●▪◦*\-–—]|\d+[.)])\s+")
 YEARS = re.compile(r"(\d{1,2})\s*\+?\s*(?:years?|yrs?)(?:\s+of)?", re.IGNORECASE)
 DEGREE = re.compile(r"\b(ph\.?d|doctorate|master'?s?|m\.?s\.?|bachelor'?s?|b\.?s\.?|b\.?a\.?|associate'?s?)\b", re.IGNORECASE)
 CLEARANCE = re.compile(r"\b(ts/sci|top secret|secret clearance|security clearance|public trust|polygraph)\b", re.IGNORECASE)
+GPA = re.compile(r"(?:minimum\s+|min\.?\s+)?gpa\s+(?:of\s+)?(\d\.\d+)", re.IGNORECASE)
+CITIZENSHIP = re.compile(r"\bu\.?s\.?\s+citizen\b|\bus\s+citizen\b|\bcitizenship\s+required\b", re.IGNORECASE)
+ITAR = re.compile(r"\bitar\b", re.IGNORECASE)
 NO_SPONSOR = re.compile(r"(?:no|not|unable to|cannot|can't|will not|do not)\s+(?:provide\s+)?(?:visa\s+)?sponsor", re.IGNORECASE)
 YES_SPONSOR = re.compile(r"(?:visa\s+)?sponsorship\s+(?:is\s+)?(?:available|provided|offered)", re.IGNORECASE)
 
@@ -48,6 +51,9 @@ class JD:
     degree: str | None = None
     clearance: str | None = None
     sponsorship: bool | None = None
+    gpa_floor: float | None = None
+    citizenship_required: bool = False
+    itar_required: bool = False
     salary_min: int | None = None
     salary_max: int | None = None
 
@@ -62,8 +68,9 @@ def _heading(line: str) -> str | None:
     if len(key) > 60:
         return None
     if re.match(
-        r"^(what you should have|what we'?re looking for|who you are|you have|requirements|"
-        r"qualifications|minimum qualifications|basic qualifications|must have|must-haves|skills|experience)$",
+        r"^(what you should have|what we'?re looking for|what we require|what we need|what you'?ll need|"
+        r"who you are|you have|requirements|requirements and qualifications|qualifications|"
+        r"minimum qualifications|basic qualifications|must have|must-haves|skills|experience)$",
         key,
     ):
         return "requirements"
@@ -192,6 +199,10 @@ def parse_jd(
     degree = _degree_level(text)
     clearance_match = CLEARANCE.search(text)
     clearance = clearance_match.group(1).lower() if clearance_match else None
+    gpa_match = GPA.search(text)
+    gpa_floor = float(gpa_match.group(1)) if gpa_match else None
+    citizenship_required = bool(CITIZENSHIP.search(text))
+    itar_required = bool(ITAR.search(text))
     if NO_SPONSOR.search(text):
         sponsorship = False
     elif YES_SPONSOR.search(text):
@@ -223,6 +234,9 @@ def parse_jd(
         degree=degree,
         clearance=clearance,
         sponsorship=sponsorship,
+        gpa_floor=gpa_floor,
+        citizenship_required=citizenship_required,
+        itar_required=itar_required,
         salary_min=smin,
         salary_max=smax,
     )

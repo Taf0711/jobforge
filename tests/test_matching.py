@@ -56,7 +56,7 @@ def test_jd_sections_do_not_treat_responsibilities_as_requirements():
     assert jd.years_required == 2
 
 
-def test_clearance_gate_zeroes_score():
+def test_clearance_gate_nearly_zeroes_ineligible_score():
     job = Job(
         id=1,
         source="lever",
@@ -67,8 +67,73 @@ def test_clearance_gate_zeroes_score():
         description="Requirements:\n- Active security clearance required\n- Python experience",
     )
     result = score_job(job, _profile(), Preferences(titles=["Software Engineer"], locations=["Remote"]))
-    assert result.gate_survival == 0
-    assert result.score == 0
+    assert result.gate_survival == 0.02
+    assert result.score < 2
+
+
+def test_clearance_eligible_profile_gets_partial_survival():
+    job = Job(
+        id=1,
+        source="lever",
+        source_id="1",
+        company="Defense Co",
+        title="Software Engineer",
+        location="Remote",
+        description="Requirements:\n- Active security clearance required\n- Python experience",
+    )
+    profile = _profile(work_auth={"authorized": True, "years_experience": 2, "clearance_eligible": True})
+    result = score_job(job, profile, Preferences(titles=["Software Engineer"], locations=["Remote"]))
+    assert result.gate_survival == 0.35
+    assert any("Clearance-eligible" in reason for reason in result.reasons)
+
+
+def test_citizenship_itar_and_gpa_gates():
+    profile = _profile(work_auth={"authorized": True, "years_experience": 2, "gpa": 3.0})
+    preferences = Preferences(titles=["Software Engineer"], locations=["Remote"])
+    citizenship = score_job(
+        Job(
+            id=4,
+            source="lever",
+            source_id="4",
+            company="Defense Co",
+            title="Software Engineer",
+            location="Remote",
+            description="Requirements:\n- Must be a US citizen\n- Python",
+        ),
+        profile,
+        preferences,
+    )
+    assert citizenship.gate_survival == 0.02
+
+    itar = score_job(
+        Job(
+            id=5,
+            source="lever",
+            source_id="5",
+            company="Defense Co",
+            title="Software Engineer",
+            location="Remote",
+            description="Requirements:\n- ITAR position\n- Python",
+        ),
+        profile,
+        preferences,
+    )
+    assert itar.gate_survival == 0.05
+
+    gpa = score_job(
+        Job(
+            id=6,
+            source="lever",
+            source_id="6",
+            company="Acme",
+            title="Software Engineer",
+            location="Remote",
+            description="Requirements:\n- Minimum GPA 3.5\n- Python",
+        ),
+        profile,
+        preferences,
+    )
+    assert gpa.gate_survival == 0.08
 
 
 def test_senior_title_penalty_for_entry_profile():
@@ -95,3 +160,25 @@ def test_thin_jd_is_capped():
     result = score_job(job, _profile(), Preferences(titles=["Software Engineer"], locations=["Remote"]))
     assert result.score <= 30
     assert any("thin" in g.lower() for g in result.gaps)
+
+
+def test_what_we_require_and_technologies_headings_are_parsed():
+    jd = parse_jd(
+        """The Role
+Build query engines.
+
+Technologies We Use
+Java, Scala, Rust, and Python
+Apache Spark and Apache DataFusion
+
+What We Require
+Proficiency in Java, Rust, Scala, C++, or C.
+Strong foundations in algorithms and data structures.
+""",
+        title_hint="Software Engineer, Query Engines",
+    )
+
+    assert "Java" in jd.must_skills
+    assert "C++" in jd.must_skills
+    assert "Python" in jd.skills
+    assert "Spark" in jd.skills

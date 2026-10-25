@@ -165,7 +165,9 @@ def tailor_job(config: Config, conn: sqlite3.Connection, job_id: int) -> dict[st
     llm = LLMClient(config.llm)
     run_id = db.start_run(conn, "tailor")
     try:
-        result = tailor_resume(profile, job, config.output_dir, llm=llm)
+        result = tailor_resume(
+            profile, job, config.output_dir, llm=llm, archetypes=load_archetypes(config)
+        )
         app = Application(
             job_id=job.id,
             profile_id=profile.id,
@@ -308,6 +310,22 @@ def load_network(config: Config | None) -> Any | None:
     ]
     network_path = next((path for path in candidates if path.exists()), None)
     return NetworkGraph(network_path) if network_path is not None else None
+
+
+def load_archetypes(config: Config | None) -> dict[str, Any]:
+    """Load the local role-archetype file, if the user imported one."""
+    if config is None:
+        return {}
+    from .matching.archetypes import load_archetypes as _load
+
+    candidates = [
+        Path(config.data_dir) / "role_archetypes.yml",
+        Path(config.data_dir) / "role_archetypes.yaml",
+        base_dir() / "role_archetypes.yml",
+        base_dir() / "role_archetypes.yaml",
+    ]
+    path = next((item for item in candidates if item.exists()), None)
+    return _load(path) if path is not None else {}
 
 
 def warm_summary(graph: Any, company: str, fit: float) -> dict[str, Any]:

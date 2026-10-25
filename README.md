@@ -68,7 +68,7 @@ uv tool install --from git+ssh://git@github.com/Taf0711/jobforge.git jobforge
 For a reproducible release, pin the tag:
 
 ```bash
-uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.2.0" jobforge
+uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.3.0" jobforge
 ```
 
 `jobforge setup` writes config, data, output, and browser state under a per-user
@@ -131,6 +131,7 @@ jobforge import-resume-forge \
   --projects /path/to/projects.yml \
   --evidence /path/to/evidence_matrix.yml \
   --network  /path/to/network.yml \
+  --archetypes /path/to/role_archetypes.yml \
   --applications /path/to/applications.yml \
   --resume   /path/to/base_resume.pdf
 ```

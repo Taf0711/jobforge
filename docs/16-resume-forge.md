@@ -13,6 +13,7 @@ jobforge import-resume-forge \
   --projects /path/to/projects.yml \
   --evidence /path/to/evidence_matrix.yml \
   --network  /path/to/network.yml \
+  --archetypes /path/to/role_archetypes.yml \
   --applications /path/to/applications.yml \
   --resume   /path/to/Tafseer_H_Resume.pdf \
   --email    you@example.com
@@ -36,6 +37,7 @@ rows and skips `Not Started` rows unless `--include-unstarted` is passed.
 | `projects.yml` | project bank with `tags`, `best_for`, `tech_line`, and project facts |
 | `evidence_matrix.yml` skills | profile skill inventory |
 | `network.yml` | `data/network.yml`, converted to JobForge's relationship/strength schema |
+| `role_archetypes.yml` | `data/role_archetypes.yml`; tailoring uses the detected archetype's `strongest_projects` priority |
 | `applications.yml` | jobs + application rows with mapped statuses |
 
 ## Application status mapping
@@ -54,18 +56,32 @@ application notes.
 
 ## Project selection and one-page output
 
-A profile can carry 13 projects. `tailor_resume` scores project tags,
-`best_for` labels, tech lines, and bullets against the job title, JD skills, and
-a small domain map, then renders the top three. Profiles with more than three
-projects use `template_compact.typ` (resume-forge-style margins, 9pt bullets,
-8pt skills). The result is checked by the ATS gate and should stay on one page.
+A profile can carry 13 projects. When `role_archetypes.yml` is present,
+`tailor_resume` detects the closest archetype from JD signals and boosts its
+`strongest_projects` list; remaining slots are filled by project tags,
+`best_for` labels, tech lines, and bullets scored against the JD title, skills,
+and a small domain map. Profiles with more than three projects use
+`template_compact.typ` (resume-forge-style margins, 9pt bullets, 8pt skills).
+The result is checked by the ATS gate and should stay on one page.
+
+## Scoring gates folded in
+
+The JD parser and scorer now use the resume-forge gate model for:
+
+- US-citizenship requirements
+- ITAR eligibility
+- active security clearance vs. clearance eligibility
+- minimum GPA vs. `scoring_inputs.gpa_for_scoring`
+- degree floor and years-of-experience survival
+- "What We Require" / "Technologies We Use" JD headings
 
 ## Not yet imported
 
 These resume-forge assets are candidates for a later pass:
 
-- `role_archetypes.yml` for explicit archetype-to-project selection
-- `scoring_model.py` GPA/citizenship/ITAR/start-date/comp-policy gates and ROI
+- compensation-policy verdicts (NYC target/exception floors) and location economics
+- callback-odds / ROI / interview-pass model
+- start-date gate
 - `ats_check.py` and `humanizer_check.py` as stricter post-render gates
 - `retrospect.py` funnel/outcome calibration
 - per-application email rotation

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import Job, Profile, slugify
+from ..matching.archetypes import ArchetypeMatch, detect_archetype
 from ..matching.jd import JD, parse_jd
 from ..matching.skills import GRAPH_PATH, SkillGraph, extract_skills
 from .ats_check import ats_check
@@ -124,7 +125,12 @@ def _text_domains(text: str) -> set[str]:
     }
 
 
-def select_projects(profile: Profile, jd: JD, max_projects: int = 3) -> list[dict[str, Any]]:
+def select_projects(
+    profile: Profile,
+    jd: JD,
+    max_projects: int = 3,
+    archetypes: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Choose the most JD-relevant projects while preserving profile order.
 
     A parsed resume usually contains three projects. The resume-forge project
@@ -134,6 +140,12 @@ def select_projects(profile: Profile, jd: JD, max_projects: int = 3) -> list[dic
     """
     if len(profile.projects) <= max_projects:
         return list(profile.projects)
+
+    match: ArchetypeMatch | None = detect_archetype(jd, archetypes or {})
+    priority: dict[str, int] = {}
+    if match:
+        for rank, name in enumerate(match.spec.get("strongest_projects", []) or []):
+            priority[str(name).strip().lower()] = rank
 
     jd_terms = set(jd.skills) | set(jd.must_skills) | _keywords(jd.description)
     jd_skills = set(jd.skills) | set(jd.must_skills)
@@ -171,6 +183,9 @@ def select_projects(profile: Profile, jd: JD, max_projects: int = 3) -> list[dic
             + 4 * len(project_domains & jd_domains)
             + min(3, len(signals & jd_terms))
         )
+        project_name = str(project.get("title", "") or project.get("name", "")).strip().lower()
+        if project_name in priority:
+            score += 10_000 - priority[project_name] * 100
         scored.append((score, index, project))
 
     chosen = sorted(scored, key=lambda item: (-item[0], item[1]))[:max_projects]
@@ -211,7 +226,13 @@ def _format_certification(cert: dict[str, Any]) -> str:
     return name
 
 
-def build_data(profile: Profile, jd: JD, selected: list[dict[str, Any]], summary: str = "") -> dict[str, Any]:
+def build_data(
+    profile: Profile,
+    jd: JD,
+    selected: list[dict[str, Any]],
+    summary: str = "",
+    archetypes: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     contact = [
         profile.email,
         profile.phone,
@@ -243,7 +264,7 @@ def build_data(profile: Profile, jd: JD, selected: list[dict[str, Any]], summary
         )
 
     projects = []
-    for entry in select_projects(profile, jd):
+    for entry in select_projects(profile, jd, archetypes=archetypes):
         key = (str(entry.get("title", "")), str(entry.get("company", "")), "projects")
         bullets = [f["text"] for f in selected_by_entry.get(key, [])]
         if not bullets:
@@ -366,11 +387,12 @@ def tailor_resume(
     *,
     llm: LLMClient | None = None,
     write_cover_letter: bool = True,
+    archetypes: dict[str, dict[str, Any]] | None = None,
 ) -> TailorResult:
     jd = parse_jd(job.description or job.title, title_hint=job.title, company_hint=job.company, location_hint=job.location)
     selected, fact_ids = select_facts(profile, jd, max_per_entry=4)
     summary = summarize(profile, job, jd, llm)
-    data = build_data(profile, jd, selected, summary=summary)
+    data = build_data(profile, jd, selected, summary=summary, archetypes=archetypes)
     out_dir = Path(output_root) / slugify(job.company) / slugify(job.title, 60)
     template = COMPACT_TEMPLATE if len(profile.projects) > 3 else TEMPLATE
     pdf_path, typ_path, data_path = render(data, out_dir, template=template)

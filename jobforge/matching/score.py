@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from ..models import Job, MatchResult, Preferences, Profile
+from .gates import citizenship_survival, clearance_survival, gpa_survival, itar_survival
 from .jd import JD, parse_jd
 from .skills import SkillGraph, coverage
 
@@ -178,10 +179,54 @@ def score_job(
 
     have_clearance = _profile_clearance(profile, prefs)
     if jd.clearance:
-        if CLEARANCE_RANK.get(have_clearance, 0) < CLEARANCE_RANK.get(jd.clearance, 0):
-            gates.append((0.0, "", f"Clearance required: {jd.clearance}"))
-        else:
+        if CLEARANCE_RANK.get(have_clearance, 0) >= CLEARANCE_RANK.get(jd.clearance, 0):
             gates.append((1.0, f"Clearance matches: {jd.clearance}", ""))
+        else:
+            eligible = bool(profile.work_auth.get("clearance_eligible", False))
+            survival = clearance_survival(active_required=True, eligible=eligible)
+            reason = "Clearance-eligible for a clearance requirement" if eligible else ""
+            gates.append(
+                (
+                    survival,
+                    reason,
+                    f"Clearance required: {jd.clearance}"
+                    + ("" if eligible else " (not clearance-eligible)"),
+                )
+            )
+
+    if jd.citizenship_required:
+        survival = citizenship_survival(True, bool(profile.work_auth.get("us_citizen", False)))
+        gates.append(
+            (
+                survival,
+                "US citizen — satisfies citizenship requirement" if survival >= 1.0 else "",
+                "US citizenship required" if survival < 1.0 else "",
+            )
+        )
+
+    if jd.itar_required:
+        survival = itar_survival(True, bool(profile.work_auth.get("itar_eligible", False)))
+        gates.append(
+            (
+                survival,
+                "ITAR-eligible" if survival >= 1.0 else "",
+                "ITAR eligibility required" if survival < 1.0 else "",
+            )
+        )
+
+    if jd.gpa_floor is not None:
+        raw_gpa = profile.work_auth.get("gpa")
+        try:
+            candidate_gpa = float(raw_gpa) if raw_gpa is not None else None
+        except (TypeError, ValueError):
+            candidate_gpa = None
+        survival = gpa_survival(jd.gpa_floor, candidate_gpa)
+        if survival >= 1.0:
+            gates.append((1.0, f"GPA clears the {jd.gpa_floor:.2f} floor", ""))
+        elif survival == 0.5:
+            gates.append((0.5, "", f"GPA {jd.gpa_floor:.2f} is slightly above the profile GPA"))
+        else:
+            gates.append((survival, "", f"GPA floor {jd.gpa_floor:.2f} likely screens this out"))
 
     if jd.sponsorship is False and prefs.needs_sponsorship:
         gates.append((0.0, "", "Employer will not sponsor a visa"))

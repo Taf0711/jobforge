@@ -221,6 +221,7 @@ def test_cli_import_resume_forge_writes_profile_and_network(tmp_path: Path):
         projects=str(_write(tmp_path, "projects.yml", PROJECTS)),
         evidence=str(_write(tmp_path, "evidence.yml", EVIDENCE)),
         network=str(_write(tmp_path, "network.yml", NETWORK)),
+        archetypes=str(_write(tmp_path, "archetypes.yml", {"archetypes": {"systems": {"label": "Systems", "jd_signals": ["C++"], "strongest_projects": ["Alpha"]}}})),
         applications=str(_write(tmp_path, "applications.yml", APPLICATIONS)),
         resume=None,
         include_unstarted=False,
@@ -237,4 +238,5 @@ def test_cli_import_resume_forge_writes_profile_and_network(tmp_path: Path):
     assert active is not None
     assert active.full_name == "Test User"
     assert (cfg.data_dir / "network.yml").is_file()
+    assert (cfg.data_dir / "role_archetypes.yml").is_file()
     assert app_count == 1
