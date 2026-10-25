@@ -58,7 +58,7 @@ libraries on a minimal distro (`playwright install-deps chromium`).
 `winget install Typst.Typst`, then run the same `uv tool install` and
 `jobforge setup` commands from PowerShell.
 
-If the repository is private, authenticate first (`gh auth login` and
+If you are installing from a private fork, authenticate first (`gh auth login` and
 `gh auth setup-git`) or use the SSH URL:
 
 ```bash
