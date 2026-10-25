@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include config.example.yml
+include network.example.yml
+include jobforge/matching/skill_graph.yml
+include jobforge/tailoring/template.typ
+recursive-include jobforge/data *
+recursive-include jobforge/web/templates *
+recursive-include jobforge/web/static *

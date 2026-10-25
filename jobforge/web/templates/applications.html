@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Applications · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">Track</p><h1>Applications</h1></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ apps|length }} records</h2><span class="muted">Status is yours to update; email polling can suggest changes.</span></div>
+  {% if apps %}
+  <table>
+    <thead><tr><th>Company</th><th>Role</th><th>ATS</th><th>Status</th><th>Updated</th><th>Resume</th></tr></thead>
+    <tbody>
+    {% for app in apps %}
+      <tr>
+        <td><a href="/jobs/{{ app.job_id }}">{{ app.company }}</a></td>
+        <td>{{ app.title }}</td>
+        <td class="muted">{{ app.ats or '—' }}</td>
+        <td>
+          <form method="post" action="/applications/{{ app.id }}/status" class="inline">
+            <select name="status" onchange="this.form.submit()">
+              {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if app.status == s else '' }}>{{ s }}</option>{% endfor %}
+            </select>
+          </form>
+        </td>
+        <td class="muted">{{ app.updated_at[:16] }}</td>
+        <td>{% if app.resume_path %}<a class="link" href="file://{{ app.resume_path }}">PDF</a>{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No applications yet. Tailor a resume from a job page to create a draft.</p>
+  {% endif %}
+</section>
+{% endblock %}

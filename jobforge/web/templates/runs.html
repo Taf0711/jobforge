@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Runs · JobForge{% endblock %}
+{% block content %}
+<section class="page-head"><div><p class="eyebrow">Log</p><h1>Runs</h1></div></section>
+<section class="panel">
+  {% if runs %}
+  <table>
+    <thead><tr><th>#</th><th>Kind</th><th>Started</th><th>Finished</th><th>Status</th><th>Stats</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.kind }}</td>
+        <td class="muted">{{ r.started_at[:16] }}</td>
+        <td class="muted">{{ r.finished_at[:16] if r.finished_at else '—' }}</td>
+        <td><span class="pill">{{ r.status }}</span></td>
+        <td class="muted">{{ r.stats|short(160) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">No runs yet.</p>{% endif %}
+</section>
+{% endblock %}

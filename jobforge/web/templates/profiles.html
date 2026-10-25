@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Profiles · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">You</p><h1>Profiles</h1></div>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Active profile</h2><span class="pill">{{ profile.name }}</span></div>
+    <p><strong>{{ profile.full_name or 'No name parsed' }}</strong><br>
+      <span class="muted">{{ profile.email }}{% if profile.phone %} · {{ profile.phone }}{% endif %}{% if profile.location %} · {{ profile.location }}{% endif %}</span>
+    </p>
+    {% if profile.links %}
+      <p class="muted">{% for k, v in profile.links.items() %}<a class="link" href="{{ v }}" target="_blank" rel="noopener">{{ k }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    {% endif %}
+    <p class="muted">Resume: <code>{{ profile.resume_path or 'not set' }}</code></p>
+    <p class="muted">{{ profile.experience|length }} experience entries · {{ profile.projects|length }} projects · {{ profile.facts|length }} facts · {{ profile.skills|length }} skills</p>
+    {% if profile.skills %}
+      <h3>Skills</h3>
+      <p class="chips">{% for s in profile.skills %}<span class="chip">{{ s }}</span>{% endfor %}</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Import</h2></div>
+    <p class="muted">Upload a PDF, DOCX, TXT, MD, YAML, or JSON profile. Parsing is heuristic; review the result before applying.</p>
+    <form method="post" action="/profiles/import" enctype="multipart/form-data" class="stack">
+      <input type="file" name="file" accept=".pdf,.docx,.txt,.md,.yaml,.yml,.json" required>
+      <button class="primary">Import profile</button>
+    </form>
+    <h3>Profiles</h3>
+    <table class="compact"><tbody>
+      {% for p in profiles %}
+      <tr>
+        <td>{{ p.name }}</td>
+        <td>{% if p.is_active %}<span class="pill">active</span>{% else %}
+          <form method="post" action="/profiles/{{ p.id }}/activate" class="inline"><button class="ghost">activate</button></form>
+        {% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+</section>
+
+{% if profile.experience %}
+<section class="panel">
+  <div class="panel-head"><h2>Parsed experience</h2><span class="muted">Edit the source resume or import a YAML profile to correct</span></div>
+  {% for e in profile.experience %}
+    <div class="entry">
+      <strong>{{ e.title }}{% if e.company %} — {{ e.company }}{% endif %}</strong>
+      <span class="muted">{{ e.start }}{% if e.end %} – {{ e.end }}{% endif %}{% if e.location %} · {{ e.location }}{% endif %}</span>
+      <ul>{% for b in e.bullets %}<li>{{ b }}</li>{% endfor %}</ul>
+    </div>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,77 @@
+# JobForge configuration
+# Copy to config.yml and edit. Paths are relative to the repository root.
+
+data_dir: data
+output_dir: output
+profile: null          # optional YAML/JSON profile override
+resume: null           # optional base resume path (PDF/DOCX/TXT/MD)
+
+sources:
+  greenhouse:
+    boards: []         # e.g. [stripe, discord]
+  lever:
+    boards: []         # e.g. [leverdemo, spotify]
+  ashby:
+    boards: []         # e.g. [linear]
+  workable:
+    boards: []         # e.g. [seedlegals]
+  smartrecruiters:
+    companies: []      # e.g. [Ubisoft]
+  workday:
+    boards: []         # e.g. ["acme|wd1|External"] or a myworkdayjobs.com board URL
+
+# Seed preferences on first run. Stored in SQLite afterwards.
+preferences:
+  titles: []
+  industries: []
+  locations: ["New York, NY"]
+  work_modes: ["remote", "hybrid", "onsite"]
+  employment_types: ["full-time"]
+  experience_levels: ["entry", "junior"]
+  years_of_experience: 1
+  salary_min: 0
+  salary_max: null
+  needs_sponsorship: false
+  security_clearance: "none"
+  excluded_companies: []
+  excluded_keywords: []
+  included_keywords: []
+  min_match: 55
+  one_application_per_company: true
+
+llm:
+  enabled: false
+  base_url: "http://localhost:11434/v1"
+  api_key: ""
+  model: "llama3.1:8b"
+  timeout: 120
+  temperature: 0.2
+
+email:
+  enabled: false
+  host: "imap.gmail.com"
+  port: 993
+  username: ""
+  password_env: "JOBFORGE_IMAP_PASSWORD"
+  folder: "INBOX"
+  lookback_days: 30
+  verification_domains: []
+  verification_senders: []
+
+browser:
+  headless: false
+  user_data_dir: "data/browser"
+  channel: ""           # "chrome" uses system Chrome instead of bundled Chromium
+  slow_mo: 0
+  timeout_ms: 30000
+  allow_submit: false   # keep false: human clicks Submit
+
+server:
+  host: "127.0.0.1"
+  port: 8765
+  access_token: ""      # optional bearer token if you bind beyond localhost
+
+# Risky modes are OFF by default and stored in data/risk.json, not this file.
+# See docs/13-risk-consent.md. Enable with:
+#   python -m jobforge risk enable --flag unattended_submit \
+#     --acknowledge "I UNDERSTAND THE RISK"

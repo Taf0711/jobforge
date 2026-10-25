@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Risk settings · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Settings / Risk</p>
+    <h1>Risk settings</h1>
+  </div>
+  <a class="button" href="/settings">Back to settings</a>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Unattended submit</h2>
+    <span class="pill {{ 'bad' if risk.policy.unattended_submit else '' }}">
+      {{ 'ENABLED' if risk.policy.unattended_submit else 'OFF (default)' }}
+    </span>
+  </div>
+  <pre class="jd" style="max-height:none">{{ risk.warnings['unattended_submit'] }}</pre>
+  <p class="muted">
+    Usage today: <strong>{{ risk.usage.count }}</strong> / {{ risk.policy.daily_submit_cap }}.
+    {% if risk.policy.consented_at %}Consent recorded {{ risk.policy.consented_at }}.{% endif %}
+  </p>
+
+  {% if not risk.policy.unattended_submit %}
+  <form method="post" action="/settings/risk" class="stack">
+    <input type="hidden" name="action" value="enable">
+    <input type="hidden" name="flag" value="unattended_submit">
+    <label>
+      <span>Type <code>{{ risk.consent_phrase }}</code> to confirm</span>
+      <input name="acknowledge" autocomplete="off" required>
+    </label>
+    <button class="primary">Enable unattended submit</button>
+  </form>
+  {% else %}
+  <form method="post" action="/settings/risk" class="stack">
+    <input type="hidden" name="action" value="disable">
+    <input type="hidden" name="flag" value="unattended_submit">
+    <button>Disable unattended submit</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Not available</h2><span class="muted">manual only</span></div>
+  <p class="muted">These modes are deliberately not implemented. Enabling them is not possible.</p>
+  {% for flag in risk.unavailable %}
+    <pre class="jd" style="max-height:none">{{ risk.warnings[flag] }}</pre>
+  {% endfor %}
+</section>
+{% endblock %}

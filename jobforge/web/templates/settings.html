@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Settings · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">Configure</p><h1>Settings</h1></div>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Search preferences</h2></div>
+    <form method="post" action="/settings" class="stack">
+      <label>Target titles <span class="muted">(comma-separated, max 5)</span>
+        <input name="titles" value="{{ prefs.titles|join(', ') }}" placeholder="Software Engineer, Backend Engineer">
+      </label>
+      <label>Locations <span class="muted">(comma-separated)</span>
+        <input name="locations" value="{{ prefs.locations|join(', ') }}" placeholder="New York, NY, Remote">
+      </label>
+      <div class="row">
+        <label>Work modes <input name="work_modes" value="{{ prefs.work_modes|join(', ') }}" placeholder="remote, hybrid, onsite"></label>
+        <label>Employment types <input name="employment_types" value="{{ prefs.employment_types|join(', ') }}" placeholder="full-time, contract"></label>
+      </div>
+      <div class="row">
+        <label>Experience levels <input name="experience_levels" value="{{ prefs.experience_levels|join(', ') }}" placeholder="entry, junior, mid"></label>
+        <label>Minimum salary (USD) <input type="number" name="salary_min" value="{{ prefs.salary_min }}" min="0" step="1000"></label>
+      </div>
+      <div class="row">
+        <label>Minimum match <input type="number" name="min_match" value="{{ prefs.min_match }}" min="0" max="100"></label>
+        <label class="check"><input type="checkbox" name="needs_sponsorship" value="1" {{ 'checked' if prefs.needs_sponsorship else '' }}> I need visa sponsorship</label>
+        <label class="check"><input type="checkbox" name="open_to_relocation" value="1" {{ 'checked' if prefs.open_to_relocation else '' }}> Open to relocation</label>
+      </div>
+      <label>Excluded companies <input name="excluded_companies" value="{{ prefs.excluded_companies|join(', ') }}"></label>
+      <label>Excluded keywords <input name="excluded_keywords" value="{{ prefs.excluded_keywords|join(', ') }}"></label>
+      <label>Required keywords <input name="included_keywords" value="{{ prefs.included_keywords|join(', ') }}"></label>
+      <button class="primary">Save and rescore</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Runtime</h2></div>
+    <table class="compact"><tbody>
+      <tr><td>Database</td><td><code>{{ cfg.db_path }}</code></td></tr>
+      <tr><td>Output</td><td><code>{{ cfg.output_dir }}</code></td></tr>
+      <tr><td>LLM</td><td>{% if llm_ready %}<span class="pill">configured</span>{% else %}<span class="muted">off (deterministic tailoring)</span>{% endif %}</td></tr>
+      <tr><td>Email</td><td>{% if email_ready %}<span class="pill">configured</span>{% else %}<span class="muted">off</span>{% endif %}</td></tr>
+      <tr><td>Submit</td><td><span class="pill">human clicks Submit</span></td></tr>
+    </tbody></table>
+
+    <h3>Source boards</h3>
+    <p class="muted">Edit <code>config.yml</code> to add boards, then run a scan.</p>
+    <table class="compact"><tbody>
+      {% for name, boards in boards.items() %}
+      <tr><td>{{ name }}</td><td class="muted">{{ boards|join(', ') if boards else '—' }}</td></tr>
+      {% endfor %}
+    </tbody></table>
+
+    <h3>Risk</h3>
+    <p class="muted">Unattended submit is off by default. <a class="link" href="/settings/risk">Review risk settings</a> before enabling it. Captcha solving and Indeed/LinkedIn automation are not available.</p>
+
+    <h3>Data</h3>
+    <form method="post" action="/export"><button>Export all data (JSON)</button></form>
+    <p class="muted">Secrets are read from environment variables, never from this page.</p>
+  </div>
+</section>
+{% endblock %}

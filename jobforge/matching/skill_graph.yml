@@ -1,0 +1,34 @@
+schema_version: 1
+# Skill ontology for explainable partial credit.
+# A family member gets `partial * evidence` credit toward a sibling the candidate
+# does not directly list. Cross-family edges cover adjacencies families miss.
+
+families:
+  web_backend:    { partial: 0.60, members: [Flask, FastAPI, Django, Express, Node.js, Spring, Rails, Gin, NestJS] }
+  web_frontend:   { partial: 0.60, members: [React, Next.js, Vue, Angular, Svelte, SolidJS, HTML, CSS, Tailwind] }
+  lang_systems:   { partial: 0.50, members: [C, "C++", "C/C++", Rust, Go, Golang, Zig] }
+  lang_jvm:       { partial: 0.60, members: [Java, Kotlin, Scala] }
+  lang_script:    { partial: 0.40, members: [Python, Ruby, JavaScript, TypeScript, PHP, Perl] }
+  containers:     { partial: 0.70, members: [Docker, Kubernetes, Podman, Nomad, ECS, EKS] }
+  cloud:          { partial: 0.60, members: [AWS, GCP, "Google Cloud", Azure, "Cloud Foundry", Lambda, S3, EC2] }
+  sql:            { partial: 0.70, members: [PostgreSQL, MySQL, SQLite, MariaDB, "SQL Server", Oracle] }
+  nosql_cache:    { partial: 0.50, members: [MongoDB, DynamoDB, Cassandra, Redis, Memcached, Firestore] }
+  mq_streaming:   { partial: 0.40, members: [Kafka, RabbitMQ, SQS, "Pub/Sub", Kinesis, NATS] }
+  ml_frameworks:  { partial: 0.45, members: [PyTorch, TensorFlow, scikit-learn, Keras, JAX, XGBoost] }
+  ml_concepts:    { partial: 0.50, members: ["Machine Learning", "Reinforcement Learning", "Deep Learning", NLP, "Computer Vision", "LLM"] }
+  iac:            { partial: 0.50, members: [Terraform, Pulumi, CloudFormation, Ansible, Helm] }
+  observability:  { partial: 0.60, members: [Prometheus, Grafana, Datadog, OpenTelemetry, ELK, Splunk] }
+  api_styles:     { partial: 0.50, members: ["REST APIs", GraphQL, gRPC, WebSockets, OpenAPI] }
+  testing:        { partial: 0.55, members: [pytest, JUnit, Jest, Playwright, Selenium, Cypress] }
+  data_tools:     { partial: 0.50, members: [Pandas, NumPy, Spark, Airflow, dbt, Snowflake, Databricks] }
+
+edges:
+  - [C, "Operating Systems", 0.50]
+  - ["C++", "Operating Systems", 0.50]
+  - ["C/C++", "Operating Systems", 0.50]
+  - [Go, "Distributed Systems", 0.40]
+  - [Kubernetes, "Distributed Systems", 0.35]
+  - [Kafka, "Distributed Systems", 0.40]
+  - [React, "TypeScript", 0.30]
+  - [SQL, "Data Analysis", 0.35]
+  - [Pandas, "Data Analysis", 0.45]

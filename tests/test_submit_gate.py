@@ -1,0 +1,113 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from jobforge.automation import base as automation_base
+from jobforge.automation.base import FillReport, run_application
+from jobforge.config import BrowserConfig
+from jobforge.models import Job, Preferences, Profile
+
+
+class FakeButton:
+    def __init__(self) -> None:
+        self.clicks = 0
+
+    def click(self) -> None:
+        self.clicks += 1
+
+
+class FakePage:
+    url = "https://jobs.example/apply"
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp_path = tmp_path
+
+    def goto(self, *args, **kwargs) -> None:
+        return None
+
+    def wait_for_timeout(self, milliseconds: int) -> None:
+        return None
+
+    def screenshot(self, path: str, full_page: bool = True) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"png")
+
+
+class FakeAdapter:
+    name = "fake"
+
+    def fill(self, page, job, profile, prefs, resume_path, bank) -> FillReport:
+        return FillReport(ats="fake")
+
+
+@pytest.fixture
+def fake_browser(monkeypatch, tmp_path):
+    page = FakePage(tmp_path)
+    button = FakeButton()
+
+    class FakeSession:
+        def __init__(self, config):
+            self.page = page
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def new_page(self):
+            return page
+
+    monkeypatch.setattr(automation_base, "BrowserSession", FakeSession)
+    monkeypatch.setattr(automation_base, "get_adapter", lambda url: FakeAdapter())
+    monkeypatch.setattr(automation_base, "submit_button", lambda page: button)
+    return page, button
+
+
+def _job() -> Job:
+    return Job(
+        id=1,
+        source="test",
+        source_id="1",
+        company="Acme",
+        title="Engineer",
+        apply_url="https://jobs.example/apply",
+    )
+
+
+def _run(monkeypatch, tmp_path, *, allow_submit: bool, captcha: str):
+    monkeypatch.setattr(automation_base, "captcha_present", lambda page: captcha)
+    return run_application(
+        _job(),
+        Profile(id=1),
+        Preferences(),
+        BrowserConfig(headless=True),
+        "resume.pdf",
+        allow_submit=allow_submit,
+        hold_seconds=1,
+        screenshot_dir=tmp_path,
+    )
+
+
+def test_default_review_mode_never_clicks_submit(fake_browser, monkeypatch, tmp_path):
+    _, button = fake_browser
+    report = _run(monkeypatch, tmp_path, allow_submit=False, captcha="")
+    assert report.submitted is False
+    assert button.clicks == 0
+
+
+def test_captcha_blocks_explicit_allow_submit(fake_browser, monkeypatch, tmp_path):
+    _, button = fake_browser
+    report = _run(monkeypatch, tmp_path, allow_submit=True, captcha="captcha")
+    assert report.submitted is False
+    assert button.clicks == 0
+
+
+def test_explicit_allow_submit_clicks_when_no_captcha(fake_browser, monkeypatch, tmp_path):
+    _, button = fake_browser
+    report = _run(monkeypatch, tmp_path, allow_submit=True, captcha="")
+    assert report.submitted is True
+    assert button.clicks == 1

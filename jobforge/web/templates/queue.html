@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Queue · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Supervised queue</p>
+    <h1>Application queue</h1>
+    <p class="muted">Prepare one resume at a time. Open the job page to fill the application; the human still submits.</p>
+  </div>
+  <a class="button" href="/jobs">Browse jobs</a>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Summary</h2><span class="muted">{{ queue_summary.total }} item(s)</span></div>
+    <table class="compact"><tbody>
+      <tr><td>Pending</td><td><strong>{{ queue_summary.pending }}</strong></td></tr>
+      <tr><td>Prepared</td><td><strong>{{ queue_summary.prepared }}</strong></td></tr>
+      <tr><td>Submitted</td><td><strong>{{ queue_summary.submitted }}</strong></td></tr>
+      <tr><td>Skipped</td><td><strong>{{ queue_summary.skipped }}</strong></td></tr>
+      <tr><td>Failed</td><td><strong>{{ queue_summary.failed }}</strong></td></tr>
+    </tbody></table>
+    <p class="muted">CLI: <code>jobforge queue prepare</code> then <code>jobforge queue apply --hold 600 --confirm</code>.</p>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>How this stays safe</h2></div>
+    <ul class="reasons">
+      <li>No captcha solving. A captcha hands the browser back to you.</li>
+      <li>No unattended bulk submission. The default path asks whether you submitted.</li>
+      <li>No Indeed or LinkedIn automation. Apply there manually.</li>
+      <li>Quality blockers stop the browser from opening.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Items</h2><span class="muted">ranked by score</span></div>
+  {% if queue_items %}
+  <table>
+    <thead><tr><th>Job</th><th>Company</th><th>Score</th><th>Status</th><th>Resume</th><th>Note</th></tr></thead>
+    <tbody>
+    {% for item in queue_items %}
+      <tr>
+        <td><a class="link" href="/jobs/{{ item.job_id }}">{{ item.title|short(52) }}</a></td>
+        <td>{{ item.company|short(28) }}</td>
+        <td>{{ '%.1f'|format(item.score) }}</td>
+        <td><span class="pill {{ 'bad' if item.status == 'failed' else '' }}">{{ item.status }}</span></td>
+        <td class="muted">{% if item.resume_path %}<code>{{ item.resume_path|short(42) }}</code>{% else %}—{% endif %}</td>
+        <td class="muted">{{ item.note|short(80) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">The queue is empty. Build it from scored jobs with <code>jobforge queue build</code>.</p>
+  {% endif %}
+</section>
+{% endblock %}

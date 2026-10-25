@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# local data and outputs
+/data/
+/output/
+config.yml
+network.yml
+network.yaml
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# tailored resumes are personal
+output/**/*.pdf
+output/**/*.typ
+
+# packaging
+build/
+dist/
+*.egg-info/
+.uv/

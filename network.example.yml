@@ -1,0 +1,41 @@
+# JobForge referral network (example).
+#
+# Copy this file to data/network.yml (data/ is gitignored) and replace the
+# fictional people below with your own contacts. This file is a sample only;
+# it contains no real people.
+#
+# Load it with:
+#   from jobforge.networking import NetworkGraph
+#   graph = NetworkGraph("data/network.yml")
+#
+# The only required top-level key is `connections`, a list of mappings.
+
+connections:
+  # A strong former colleague. The company name includes a suffix, which is
+  # normalized away before matching ("Northwind Robotics, Inc." -> "northwind robotics").
+  - name: "Dana Whitfield"             # Required. Person's display name.
+    company: "Northwind Robotics, Inc." # Required. Their employer; matched after normalization.
+    role: "Engineering Manager"         # Optional. Their job title; "Hiring Manager" adds +0.15.
+    relationship: "former_colleague"    # Required. alumni | former_colleague | friend | recruiter | hiring_manager | other
+    strength: "strong"                  # Required. strong | medium | weak; base weight 1.0 / 0.6 / 0.3.
+    last_contact: "2026-09-30"          # Optional. ISO date; within 90 days +0.10, within 365 +0.05.
+    notes: "Worked together on the search team; happy to make intros." # Optional. Free text.
+
+  # A recruiter at a target company. The role and relationship both match the
+  # recruiter bonus (+0.10); bonuses are not stacked.
+  - name: "Priya Raman"                # Required. Person's display name.
+    company: "Acme Analytics LLC"      # Required. Their employer; "LLC" is stripped.
+    role: "Technical Recruiter"        # Optional. "Recruiter" adds +0.10.
+    relationship: "recruiter"          # Required. One of the six relationship values.
+    strength: "medium"                 # Required. medium base weight 0.6.
+    last_contact: "2026-05-12"         # Optional. Older than 90 days, within 365: +0.05.
+    notes: "Met at a meetup; asked me to send roles I am excited about." # Optional.
+
+  # An alumni contact. A weak, long-dormant tie still gets a small warm score.
+  - name: "Marcus Lee"                 # Required. Person's display name.
+    company: "Beacon Health"           # Required. Their employer.
+    role: "Staff Engineer"             # Optional. No role bonus for this title.
+    relationship: "alumni"             # Required. alumni adds +0.05.
+    strength: "weak"                   # Required. weak base weight 0.3.
+    last_contact: "2024-02-01"         # Optional. Older than 365 days: no recency bonus.
+    notes: "Same university, different graduating class." # Optional. Free text.

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Answer bank · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">Apply</p><h1>Answer bank</h1></div>
+  <span class="pill">{{ overrides|length }} / {{ max_entries }} overrides</span>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Your overrides</h2><span class="muted">case-insensitive substring match</span></div>
+    <p class="muted">
+      Each key is matched as a substring of the application question, so a short key like
+      <code>notice period</code> covers several phrasings. Overrides win for ordinary questions.
+      Work authorization, clearance, and voluntary disclosures ignore overrides and are filled
+      only from explicit profile values; otherwise they stay unresolved for the human.
+    </p>
+    {% if overrides %}
+    <table class="compact">
+      <thead><tr><th>Question substring</th><th>Answer</th></tr></thead>
+      <tbody>
+      {% for key, value in overrides.items() %}
+        <tr><td><code>{{ key }}</code></td><td>{{ value }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No overrides yet. The built-in profile rules below still apply.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Add or update</h2></div>
+    <form method="post" action="/answers" class="stack" id="answer-form">
+      <label>Question substring
+        <input name="key" maxlength="{{ max_key_chars }}" required placeholder="e.g. notice period">
+      </label>
+      <label>Answer
+        <textarea name="value" rows="3" maxlength="{{ max_value_chars }}" required placeholder="e.g. 2 weeks"></textarea>
+      </label>
+      <button class="primary">Save override</button>
+      <p class="muted" id="answer-form-note">
+        Keys are 1–{{ max_key_chars }} characters; answers are 1–{{ max_value_chars }}.
+        Angle brackets and control characters are not allowed.
+      </p>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>Built-in rule categories</h2>
+    <span class="muted">from the active profile and preferences</span>
+  </div>
+  <table class="compact">
+    <thead><tr><th>Category</th><th>Matches questions about</th></tr></thead>
+    <tbody>
+    {% for name, description in rules %}
+      <tr><td>{{ name }}</td><td class="muted">{{ description }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    Work authorization, clearance, and voluntary disclosures (veteran status, disability, gender,
+    race, sexual orientation) are never guessed or inferred. Set them explicitly in a YAML/JSON
+    profile, or the browser filler leaves those fields unresolved for you.
+  </p>
+</section>
+
+<script src="/static/answers.js"></script>
+{% endblock %}

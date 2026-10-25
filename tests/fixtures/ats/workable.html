@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Acme — Workable application</title></head>
+<body>
+  <main>
+    <h1>Apply for Software Engineer</h1>
+    <form action="/apply" method="post">
+      <div class="field">
+        <input type="text" placeholder="Full name" autocomplete="name" required>
+      </div>
+      <div class="field">
+        <input type="email" placeholder="Email" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <input type="tel" placeholder="Phone" autocomplete="tel">
+      </div>
+      <div class="field">
+        <input type="text" placeholder="Current location" autocomplete="address-level2">
+      </div>
+      <div class="field">
+        <input type="text" placeholder="Current company" autocomplete="organization">
+      </div>
+      <div class="field">
+        <input type="url" placeholder="LinkedIn URL">
+      </div>
+      <div class="field">
+        <input type="url" placeholder="GitHub URL">
+      </div>
+      <div class="field">
+        <input type="file" name="resume" aria-label="Resume" accept=".pdf,.doc,.docx">
+      </div>
+      <div class="field">
+        <textarea name="motivation" rows="4" placeholder="Why do you want to work here?" aria-label="Why do you want to work here?"></textarea>
+      </div>
+      <div class="field">
+        <select name="work_authorization" aria-label="Are you authorized to work in the United States?">
+          <option value="">Select...</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+      <div class="field">
+        <select name="veteran_status" aria-label="Veteran status">
+          <option value="">Select...</option>
+          <option value="protected">I am a protected veteran</option>
+          <option value="not_protected">I am not a protected veteran</option>
+          <option value="decline">Decline to self-identify</option>
+        </select>
+      </div>
+      <button type="submit">Submit application</button>
+    </form>
+  </main>
+</body>
+</html>

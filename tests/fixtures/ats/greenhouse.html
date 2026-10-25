@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Acme — Greenhouse application</title></head>
+<body>
+  <main>
+    <h1>Apply for this job</h1>
+    <form id="application_form" action="/apply" method="post">
+      <div class="field">
+        <label>Full name
+          <input id="job_application_first_name" name="job_application[first_name]" type="text" required>
+        </label>
+      </div>
+      <div class="field">
+        <label for="job_application_email">Email address</label>
+        <input id="job_application_email" name="job_application[email]" type="email" required>
+      </div>
+      <div class="field">
+        <label>Phone
+          <input id="job_application_phone" name="job_application[phone]" type="tel">
+        </label>
+      </div>
+      <div class="field">
+        <label>Current location
+          <input id="job_application_location" name="job_application[location]" type="text">
+        </label>
+      </div>
+      <div class="field">
+        <input id="job_application_company" name="job_application[company]" type="text" aria-label="Current company">
+      </div>
+      <div class="field">
+        <label>LinkedIn URL
+          <input id="job_application_linkedin" name="job_application[urls][LinkedIn]" type="url">
+        </label>
+      </div>
+      <div class="field">
+        <input id="job_application_github" name="job_application[urls][GitHub]" type="url" aria-label="GitHub URL">
+      </div>
+      <div class="field">
+        <label for="job_application_resume">Resume</label>
+        <input id="job_application_resume" name="job_application[resume]" type="file" accept=".pdf,.doc,.docx">
+      </div>
+      <div class="field">
+        <label>Why do you want to work here?
+          <textarea id="job_application_why" name="job_application[why]" rows="4"></textarea>
+        </label>
+      </div>
+      <div class="field">
+        <label>Are you authorized to work in the United States?
+          <select id="job_application_work_auth" name="job_application[work_auth]">
+            <option value="">Select...</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </label>
+      </div>
+      <div class="field">
+        <label>Veteran status
+          <select id="job_application_veteran" name="job_application[veteran]">
+            <option value="">Select...</option>
+            <option value="protected">I am a protected veteran</option>
+            <option value="not_protected">I am not a protected veteran</option>
+            <option value="decline">Decline to self-identify</option>
+          </select>
+        </label>
+      </div>
+      <input type="submit" value="Submit application">
+    </form>
+  </main>
+</body>
+</html>

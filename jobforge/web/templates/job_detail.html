@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow"><a href="/jobs">Jobs</a> / {{ job.source }}</p>
+    <h1>{{ job.title }}</h1>
+    <p class="muted">{{ job.company }}{% if job.location %} · {{ job.location }}{% endif %}{% if job.remote %} · Remote{% endif %}{% if job.salary_min %} · {{ job.salary_min|money }}{% if job.salary_max %} – {{ job.salary_max|money }}{% endif %}{% endif %}</p>
+  </div>
+  <div class="actions">
+    {% if job.apply_url %}<a class="button" href="{{ job.apply_url }}" target="_blank" rel="noopener">Original posting</a>{% endif %}
+    <form method="post" action="/jobs/{{ job.id }}/tailor"><button class="primary">Tailor resume</button></form>
+    <form method="post" action="/jobs/{{ job.id }}/apply"><button {% if not quality_ready %}disabled title="Quality gate is blocked; fix the blocker checks first"{% endif %}>Fill application</button></form>
+    <form method="post" action="/jobs/{{ job.id }}/save"><button class="ghost">Save</button></form>
+    <form method="post" action="/jobs/{{ job.id }}/hide"><button class="ghost">Hide</button></form>
+  </div>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Match</h2><span class="score big {{ 'strong' if match and match.score >= 75 else ('ok' if match and match.score >= 55 else 'weak') }}">{{ '%.0f'|format(match.score) if match else '—' }}</span></div>
+    {% if match %}
+      <div class="meter-row"><span>Skill coverage</span><div class="meter"><i style="width: {{ (match.coverage * 100)|round(0) }}%"></i></div><b>{{ match.coverage|pct }}</b></div>
+      <div class="meter-row"><span>Gate survival</span><div class="meter"><i style="width: {{ (match.gate_survival * 100)|round(0) }}%"></i></div><b>{{ match.gate_survival|pct }}</b></div>
+      <h3>Reasons</h3>
+      <ul class="reasons">{% for r in match.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+      <h3>Gaps</h3>
+      <ul class="gaps">{% for g in match.gaps %}<li>{{ g }}</li>{% endfor %}</ul>
+    {% else %}
+      <p class="empty">Not scored yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Application</h2></div>
+    {% if application %}
+      <p><span class="pill">{{ application.status }}</span>{% if application.error_code %} <span class="pill bad">{{ application.error_code }}</span>{% endif %}</p>
+      {% if application.resume_path %}<p class="muted">Resume: <code>{{ application.resume_path }}</code></p>{% endif %}
+      {% if application.screenshot_path %}<p><a class="link" href="file://{{ application.screenshot_path }}">Open pre-submit screenshot</a></p>{% endif %}
+      {% if application.answers %}
+        <h3>Answers sent</h3>
+        <table class="compact"><tbody>
+        {% for k, v in application.answers.items() %}<tr><td>{{ k }}</td><td>{{ v }}</td></tr>{% endfor %}
+        </tbody></table>
+      {% endif %}
+    {% else %}
+      <p class="empty">No application prepared. Tailor a resume first, then fill.</p>
+    {% endif %}
+    {% if events %}
+      <h3>History</h3>
+      <table class="compact"><tbody>
+      {% for e in events %}<tr><td class="muted">{{ e.at[:16] }}</td><td>{{ e.kind }}</td><td>{{ e.detail }}</td></tr>{% endfor %}
+      </tbody></table>
+    {% endif %}
+  </div>
+</section>
+
+{% if quality %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Pre-submit quality</h2>
+    <span class="score {{ 'strong' if quality.ready else 'weak' }}">{{ quality.score }}</span>
+  </div>
+  <p>
+    {% if quality.ready %}
+      Ready to review. The remaining checks are warnings, not blockers.
+    {% else %}
+      <strong>Blocked.</strong> Fix the blocker checks before submitting.
+    {% endif %}
+  </p>
+  <table class="compact">
+    <thead><tr><th>Check</th><th>Severity</th><th>Result</th><th>Detail</th></tr></thead>
+    <tbody>
+    {% for check in quality.checks %}
+      <tr class="{{ 'gaprow' if not check.passed else '' }}">
+        <td>{{ check.name }}</td>
+        <td>{{ check.severity }}</td>
+        <td>{{ 'pass' if check.passed else 'fail' }}</td>
+        <td class="muted">{{ check.detail }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if warm and warm.score > 0 and warm.channel != 'cold_only' %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Warm path</h2>
+    <span class="score {{ 'strong' if warm.score >= 70 else ('ok' if warm.score >= 40 else 'weak') }}">{{ warm.score }}</span>
+  </div>
+  <p><strong>{{ warm.channel.replace('_', ' ') }}</strong> — {{ warm.reason }}</p>
+  <p class="muted">
+    Stored fit {{ '%.1f'|format(warm.fit) }}; display-only warm adjustment
+    {{ '%+.1f'|format(warm.delta) }} → {{ '%.1f'|format(warm.adjusted_fit) }}.
+    The stored match score is unchanged.
+  </p>
+  {% if warm.contacts %}
+  <table class="compact">
+    <thead><tr><th>Name</th><th>Role</th><th>Relationship</th><th>Strength</th><th>Last contact</th></tr></thead>
+    <tbody>
+    {% for c in warm.contacts %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td>{{ c.role or '—' }}</td>
+        <td>{{ c.relationship }}</td>
+        <td>{{ c.strength }}</td>
+        <td>{{ c.last_contact or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if warm.warnings %}<p class="muted">Network warnings: {{ warm.warnings|join('; ') }}</p>{% endif %}
+</section>
+{% endif %}
+
+{% if match and match.requirements %}
+<section class="panel">
+  <div class="panel-head"><h2>Requirement coverage</h2><span class="muted">Weighted by must-have vs. nice-to-have</span></div>
+  <table>
+    <thead><tr><th>Requirement</th><th>Skill</th><th>Importance</th><th>Credit</th><th>Matched by</th></tr></thead>
+    <tbody>
+    {% for r in match.requirements %}
+      <tr class="{{ 'gaprow' if r.gap else '' }}">
+        <td>{{ r.requirement|short(120) }}</td>
+        <td>{{ r.skill or '—' }}</td>
+        <td>{{ r.importance }}</td>
+        <td>{{ '%.0f'|format(r.credit * 100) }}%</td>
+        <td class="muted">{{ r.matched_by }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Job description</h2></div>
+  <pre class="jd">{{ job.description }}</pre>
+</section>
+{% endblock %}

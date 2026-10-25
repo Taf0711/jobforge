@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Acme — Lever application</title></head>
+<body>
+  <main>
+    <h1>Apply to Acme</h1>
+    <form action="/apply" method="post">
+      <div class="field">
+        <label for="name">Full name</label>
+        <input id="name" name="name" type="text" required>
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" required>
+      </div>
+      <div class="field">
+        <label for="phone">Phone</label>
+        <input id="phone" name="phone" type="tel">
+      </div>
+      <div class="field">
+        <label for="location">Current location</label>
+        <input id="location" name="location" type="text">
+      </div>
+      <div class="field">
+        <label for="org">Current company</label>
+        <input id="org" name="org" type="text">
+      </div>
+      <div class="field">
+        <label for="linkedin">LinkedIn URL</label>
+        <input id="linkedin" name="urls[LinkedIn]" type="url">
+      </div>
+      <div class="field">
+        <label for="github">GitHub URL</label>
+        <input id="github" name="urls[GitHub]" type="url">
+      </div>
+      <div class="field">
+        <label for="resume">Resume</label>
+        <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx">
+      </div>
+      <div class="field">
+        <label for="why">Why do you want to work here?</label>
+        <textarea id="why" name="why" rows="4"></textarea>
+      </div>
+      <div class="field">
+        <label for="work_auth">Are you authorized to work in the United States?</label>
+        <select id="work_auth" name="work_auth">
+          <option value="">Select...</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="gender">Gender</label>
+        <select id="gender" name="gender">
+          <option value="">Select...</option>
+          <option value="female">Female</option>
+          <option value="male">Male</option>
+          <option value="nonbinary">Non-binary</option>
+          <option value="decline">Decline to self-identify</option>
+        </select>
+      </div>
+      <button type="submit">Submit application</button>
+    </form>
+  </main>
+</body>
+</html>

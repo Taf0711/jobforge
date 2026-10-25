@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Inbox · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div><p class="eyebrow">Email</p><h1>Inbox</h1></div>
+  <form method="post" action="/email/poll"><button class="primary">Poll IMAP</button></form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>{{ emails|length }} messages</h2><span class="muted">Verification codes, confirmations, interviews, offers, rejections</span></div>
+  {% if emails %}
+  <table>
+    <thead><tr><th>Received</th><th>Category</th><th>From</th><th>Subject</th><th>Code</th></tr></thead>
+    <tbody>
+    {% for e in emails %}
+      <tr>
+        <td class="muted">{{ e.received_at[:16] }}</td>
+        <td><span class="pill cat-{{ e.category }}">{{ e.category }}</span></td>
+        <td>{{ e.sender|short(40) }}</td>
+        <td>{{ e.subject|short(80) }}</td>
+        <td>{% if e.verification_code %}<code>{{ e.verification_code }}</code>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No messages yet. Configure IMAP in <code>config.yml</code> and set <code>JOBFORGE_IMAP_PASSWORD</code>.</p>
+  {% endif %}
+</section>
+{% endblock %}
