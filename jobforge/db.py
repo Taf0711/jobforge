@@ -19,7 +19,7 @@ from .models import (
     utcnow,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS matches (
     reasons_json TEXT NOT NULL DEFAULT '[]',
     gaps_json TEXT NOT NULL DEFAULT '[]',
     requirements_json TEXT NOT NULL DEFAULT '[]',
+    meta_json TEXT NOT NULL DEFAULT '{}',
     model_version TEXT NOT NULL,
     scored_at TEXT NOT NULL,
     PRIMARY KEY (job_id, profile_id)
@@ -162,6 +163,9 @@ def init_db(path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(matches)").fetchall()}
+        if "meta_json" not in columns:
+            conn.execute("ALTER TABLE matches ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
 
@@ -286,7 +290,7 @@ def list_jobs(
 
     sql = f"""
         SELECT j.*, m.score, m.coverage, m.gate_survival, m.reasons_json, m.gaps_json,
-               m.requirements_json, m.scored_at,
+               m.requirements_json, m.meta_json, m.scored_at,
                a.id AS application_id, a.status AS application_status,
                CASE WHEN s.job_id IS NULL THEN 0 ELSE 1 END AS saved
         FROM jobs j
@@ -306,6 +310,7 @@ def list_jobs(
         d["reasons"] = json.loads(d.pop("reasons_json") or "[]")
         d["gaps"] = json.loads(d.pop("gaps_json") or "[]")
         d["requirements"] = json.loads(d.pop("requirements_json") or "[]")
+        d["meta"] = json.loads(d.pop("meta_json") or "{}")
         d["saved"] = bool(d["saved"])
         out.append(d)
     return out
@@ -332,12 +337,14 @@ def set_match(conn: sqlite3.Connection, m: MatchResult) -> None:
     conn.execute(
         """
         INSERT INTO matches (job_id, profile_id, score, coverage, gate_survival,
-                             reasons_json, gaps_json, requirements_json, model_version, scored_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+                             reasons_json, gaps_json, requirements_json, meta_json,
+                             model_version, scored_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(job_id, profile_id) DO UPDATE SET
             score=excluded.score, coverage=excluded.coverage,
             gate_survival=excluded.gate_survival, reasons_json=excluded.reasons_json,
             gaps_json=excluded.gaps_json, requirements_json=excluded.requirements_json,
+            meta_json=excluded.meta_json,
             model_version=excluded.model_version, scored_at=excluded.scored_at
         """,
         (
@@ -349,6 +356,7 @@ def set_match(conn: sqlite3.Connection, m: MatchResult) -> None:
             json.dumps(m.reasons, ensure_ascii=False),
             json.dumps(m.gaps, ensure_ascii=False),
             json.dumps(m.requirements, ensure_ascii=False),
+            json.dumps(m.meta, ensure_ascii=False),
             m.model_version,
             utcnow(),
         ),
@@ -369,6 +377,7 @@ def get_match(conn: sqlite3.Connection, job_id: int, profile_id: int) -> MatchRe
         reasons=json.loads(row["reasons_json"] or "[]"),
         gaps=json.loads(row["gaps_json"] or "[]"),
         requirements=json.loads(row["requirements_json"] or "[]"),
+        meta=json.loads(row["meta_json"] or "{}") if "meta_json" in row.keys() else {},
         model_version=row["model_version"],
     )
 

@@ -313,9 +313,12 @@ def cmd_jobs(args) -> int:
         limit=args.limit,
     )
     for row in rows:
+        pursuit = (row.get("meta") or {}).get("pursuit")
+        comp = (row.get("meta") or {}).get("comp", {}).get("verdict", "")
         print(
-            f"{row['id']:>4}  {row.get('score') or 0:>5.1f}  {row['company'][:24]:24}  "
-            f"{row['title'][:52]:52}  {row.get('location','')[:24]}"
+            f"{row['id']:>4}  fit {row.get('score') or 0:>5.1f}  "
+            f"pursuit {float(pursuit or 0):>5.1f}  {row['company'][:22]:22}  "
+            f"{row['title'][:46]:46}  {row.get('location','')[:20]:20}  {comp}"
         )
     return 0
 

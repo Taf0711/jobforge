@@ -296,6 +296,7 @@ def preferences_from_profile(data: dict[str, Any]) -> Preferences:
         open_to_relocation=bool(preferences.get("open_to_relocation", False)),
         needs_sponsorship=bool(authorization.get("sponsorship_needed", False)),
         industries=[str(item) for item in preferences.get("target_domains", []) or []],
+        comp_policy=dict(preferences.get("comp_policy", {}) or {}),
         min_match=55,
         one_application_per_company=True,
     )

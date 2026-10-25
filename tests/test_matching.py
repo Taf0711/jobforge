@@ -182,3 +182,47 @@ Strong foundations in algorithms and data structures.
     assert "C++" in jd.must_skills
     assert "Python" in jd.skills
     assert "Spark" in jd.skills
+
+
+def test_comp_policy_and_pursuit_are_stored_in_meta():
+    job = Job(
+        id=7,
+        source="lever",
+        source_id="7",
+        company="Acme",
+        title="Software Engineer",
+        location="New York, NY",
+        salary_min=145_000,
+        salary_max=155_000,
+        description="Requirements:\n- Python",
+    )
+    result = score_job(
+        job,
+        _profile(),
+        Preferences(titles=["Software Engineer"], locations=["New York, NY"]),
+    )
+
+    assert result.meta["comp"]["verdict"] == "meets_target"
+    assert result.meta["pursuit"] == round(result.score + 2, 1)
+
+
+def test_comp_policy_penalizes_nyc_below_floor():
+    job = Job(
+        id=8,
+        source="lever",
+        source_id="8",
+        company="Acme",
+        title="Software Engineer",
+        location="New York, NY",
+        salary_min=70_000,
+        salary_max=90_000,
+        description="Requirements:\n- Python",
+    )
+    result = score_job(
+        job,
+        _profile(),
+        Preferences(titles=["Software Engineer"], locations=["New York, NY"]),
+    )
+
+    assert result.meta["comp"]["verdict"] == "below_floor"
+    assert result.meta["pursuit"] == round(result.score - 20, 1)

@@ -74,12 +74,16 @@ The JD parser and scorer now use the resume-forge gate model for:
 - minimum GPA vs. `scoring_inputs.gpa_for_scoring`
 - degree floor and years-of-experience survival
 - "What We Require" / "Technologies We Use" JD headings
+- NYC compensation policy ($130k target / $105k exception / below-floor skip)
+- relocation cost-of-living modifiers
+
+The resulting **Pursuit** score is Fit + compensation + location. Fit is never
+rewritten by those modifiers.
 
 ## Not yet imported
 
 These resume-forge assets are candidates for a later pass:
 
-- compensation-policy verdicts (NYC target/exception floors) and location economics
 - callback-odds / ROI / interview-pass model
 - start-date gate
 - `ats_check.py` and `humanizer_check.py` as stricter post-render gates

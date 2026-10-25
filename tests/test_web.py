@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from jobforge import db
 from jobforge.config import Config, BrowserConfig, EmailConfig, LLMConfig, ServerConfig
+from jobforge.matching.score import score_job
 from jobforge.models import Job, MatchResult, Profile
 from jobforge.queue import Queue
 from jobforge.web.app import create_app
@@ -36,7 +37,14 @@ def test_pages_render(tmp_path: Path):
         assert "JobForge" in response.text or path == "/healthz"
 
 
-def _seed(tmp_path: Path, score: float = 10, apply_url: str = "https://jobs.example/apply"):
+def _seed(
+    tmp_path: Path,
+    score: float = 10,
+    apply_url: str = "https://jobs.example/apply",
+    location: str = "",
+    salary_min: int | None = None,
+    salary_max: int | None = None,
+):
     cfg = _config(tmp_path)
     cfg.ensure_dirs()
     app = create_app(cfg)
@@ -52,6 +60,9 @@ def _seed(tmp_path: Path, score: float = 10, apply_url: str = "https://jobs.exam
             source_id="web-1",
             company="Acme",
             title="Engineer",
+            location=location,
+            salary_min=salary_min,
+            salary_max=salary_max,
             apply_url=apply_url,
             description="Requirements:\n- Python",
         ),
@@ -92,6 +103,28 @@ def test_apply_route_blocks_before_spawning_a_browser(tmp_path: Path, monkeypatc
 
     assert response.status_code == 200
     assert "Apply blocked" in response.text
+
+
+def test_job_detail_shows_pursuit_and_comp_policy(tmp_path: Path):
+    cfg, app, job_id = _seed(
+        tmp_path,
+        score=90,
+        location="New York, NY",
+        salary_min=145_000,
+        salary_max=155_000,
+    )
+    conn = db.connect(cfg.db_path)
+    profile = db.get_active_profile(conn)
+    prefs = db.get_preferences(conn, profile.id or 0)
+    job = db.get_job(conn, job_id)
+    db.set_match(conn, score_job(job, profile, prefs))
+    conn.close()
+    response = TestClient(app).get(f"/jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert "Pursuit" in response.text
+    assert "Comp policy:" in response.text
+    assert "meets target" in response.text
 
 
 def test_apply_route_blocks_manual_only_before_spawning(tmp_path: Path, monkeypatch):

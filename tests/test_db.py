@@ -27,9 +27,21 @@ def test_profile_preferences_and_match(tmp_path: Path):
     db.save_preferences(conn, pid, Preferences(titles=["Engineer"], min_match=50))
     job = Job(source="lever", source_id="2", company="Acme", title="Engineer")
     jid = db.upsert_job(conn, job)
-    db.set_match(conn, MatchResult(job_id=jid, profile_id=pid, score=77.5, coverage=0.8, gate_survival=0.97))
+    db.set_match(
+        conn,
+        MatchResult(
+            job_id=jid,
+            profile_id=pid,
+            score=77.5,
+            coverage=0.8,
+            gate_survival=0.97,
+            meta={"pursuit": 79.5, "comp": {"verdict": "meets_target"}},
+        ),
+    )
     rows = db.list_jobs(conn, pid)
     assert rows[0]["score"] == 77.5
+    assert rows[0]["meta"]["pursuit"] == 79.5
+    assert db.get_match(conn, jid, pid).meta["comp"]["verdict"] == "meets_target"
     assert db.get_preferences(conn, pid).titles == ["Engineer"]
 
 

@@ -18,10 +18,16 @@
 
 <section class="grid-2">
   <div class="panel">
-    <div class="panel-head"><h2>Match</h2><span class="score big {{ 'strong' if match and match.score >= 75 else ('ok' if match and match.score >= 55 else 'weak') }}">{{ '%.0f'|format(match.score) if match else '—' }}</span></div>
+    <div class="panel-head"><h2>Fit</h2><span class="score big {{ 'strong' if match and match.score >= 75 else ('ok' if match and match.score >= 55 else 'weak') }}">{{ '%.0f'|format(match.score) if match else '—' }}</span></div>
     {% if match %}
       <div class="meter-row"><span>Skill coverage</span><div class="meter"><i style="width: {{ (match.coverage * 100)|round(0) }}%"></i></div><b>{{ match.coverage|pct }}</b></div>
       <div class="meter-row"><span>Gate survival</span><div class="meter"><i style="width: {{ (match.gate_survival * 100)|round(0) }}%"></i></div><b>{{ match.gate_survival|pct }}</b></div>
+      {% if match.meta and match.meta.pursuit is not none %}
+      <div class="meter-row"><span>Pursuit</span><b>{{ '%.0f'|format(match.meta.pursuit) }}</b></div>
+      {% endif %}
+      {% if match.meta and match.meta.comp %}
+      <p class="muted">Comp policy: <strong>{{ match.meta.comp.verdict.replace('_', ' ') }}</strong>{% if match.meta.comp.salary_high %} · {{ match.meta.comp.salary_low|money }}–{{ match.meta.comp.salary_high|money }}{% endif %}</p>
+      {% endif %}
       <h3>Reasons</h3>
       <ul class="reasons">{% for r in match.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
       <h3>Gaps</h3>

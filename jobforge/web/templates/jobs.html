@@ -23,11 +23,12 @@
   <div class="panel-head"><h2>{{ jobs|length }} roles</h2><span class="muted">Sorted by match</span></div>
   {% if jobs %}
   <table>
-    <thead><tr><th>Score</th><th>Company</th><th>Role</th><th>Location</th><th>Salary</th><th>Source</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Fit</th><th>Pursuit</th><th>Company</th><th>Role</th><th>Location</th><th>Salary</th><th>Source</th><th>Status</th><th></th></tr></thead>
     <tbody>
     {% for job in jobs %}
       <tr>
         <td><span class="score {{ 'strong' if (job.score or 0) >= 75 else ('ok' if (job.score or 0) >= 55 else 'weak') }}">{{ '%.0f'|format(job.score or 0) }}</span></td>
+        <td>{% set pursuit = (job.meta or {}).get('pursuit') %}{{ '%.0f'|format(pursuit) if pursuit is not none else '—' }}</td>
         <td>{{ job.company }}</td>
         <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
         <td>{{ job.location or ('Remote' if job.remote else '') }}</td>

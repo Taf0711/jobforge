@@ -68,7 +68,7 @@ uv tool install --from git+ssh://git@github.com/Taf0711/jobforge.git jobforge
 For a reproducible release, pin the tag:
 
 ```bash
-uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.3.0" jobforge
+uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.4.0" jobforge
 ```
 
 `jobforge setup` writes config, data, output, and browser state under a per-user
@@ -225,11 +225,18 @@ JD → requirements (must / nice) → skill coverage with partial credit
 - A direct skill is 1.0.
 - An adjacent skill gets partial credit from `jobforge/matching/skill_graph.yml` (e.g. Go from C++ = 0.5).
 - Unparseable prose requirements get neutral 0.6 credit; responsibilities are not counted.
-- A clearance requirement you do not meet zeroes the score.
+- A clearance requirement is a near-knockout unless you are clearance-eligible (0.35 survival) or already cleared.
 - A senior title against an entry-level target caps the gate at 0.6.
 - A JD with no parseable skills is capped at half score and flagged.
 
 Every score stores its reasons, gaps, and requirement table, so you can see why a job ranked where it did.
+
+### Fit vs. Pursuit
+
+- **Fit** = skill coverage × gate survival. It never moves for compensation or location convenience.
+- **Pursuit** = Fit + NYC compensation-policy modifier + relocation cost-of-living modifier.
+
+NYC uses a $130k target floor and a $105k exception floor; below $105k is a skip. A $105–130k role is only `exception_ok` when the channel is warm or callback odds clear 25%. Relocating to a high-COL metro with thin comp is penalized; a low-COL metro is rewarded. The match row stores both numbers and the comp verdict.
 
 ## Resume safety
 

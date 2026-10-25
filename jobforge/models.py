@@ -137,6 +137,7 @@ class Preferences:
     included_keywords: list[str] = field(default_factory=list)
     min_match: int = 55
     one_application_per_company: bool = True
+    comp_policy: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -157,7 +158,8 @@ class MatchResult:
     reasons: list[str] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
     requirements: list[dict[str, Any]] = field(default_factory=list)
-    model_version: str = "jobforge-v1"
+    meta: dict[str, Any] = field(default_factory=dict)
+    model_version: str = "jobforge-v2"
 
     @property
     def band(self) -> str:

@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from ..models import Job, MatchResult, Preferences, Profile
+from .economics import comp_policy, is_nyc_role, location_economics
 from .gates import citizenship_survival, clearance_survival, gpa_survival, itar_survival
 from .jd import JD, parse_jd
 from .skills import SkillGraph, coverage
@@ -263,6 +264,43 @@ def score_job(
     else:
         gaps.insert(0, f"Low skill coverage ({coverage_result.coverage:.0%})")
 
+    salary_low = job.salary_min if job.salary_min is not None else jd.salary_min
+    salary_high = job.salary_max if job.salary_max is not None else jd.salary_max
+    salary_mid = None
+    if salary_low is not None and salary_high is not None:
+        salary_mid = (float(salary_low) + float(salary_high)) / 2
+    elif salary_low is not None or salary_high is not None:
+        salary_mid = float(salary_low if salary_low is not None else salary_high)
+    location_text = job.location or jd.location or job.description[:500]
+    nyc = is_nyc_role(location_text)
+    comp = comp_policy(
+        nyc,
+        float(salary_low) if salary_low is not None else None,
+        float(salary_high) if salary_high is not None else None,
+        channel="cold_portal",
+        callback_pct=0.0,
+        policy=prefs.comp_policy,
+    )
+    location_mod, location_notes = location_economics(
+        location_text, salary_mid, loc_gate
+    )
+    if comp["modifier"] > 0:
+        reasons.append(f"Comp policy: {comp['verdict'].replace('_', ' ')} (+{comp['modifier']})")
+        reasons.extend(comp.get("notes", [])[:1])
+    elif comp["modifier"] < 0:
+        gaps.append(f"Comp policy: {comp['verdict'].replace('_', ' ')} ({comp['modifier']})")
+        gaps.extend(comp.get("notes", [])[:1])
+    if location_mod > 0:
+        reasons.extend(location_notes)
+    elif location_mod < 0:
+        gaps.extend(location_notes)
+    pursuit = round(score + comp["modifier"] + location_mod, 1)
+    meta = {
+        "pursuit": pursuit,
+        "comp": comp,
+        "location": {"modifier": location_mod, "notes": location_notes},
+    }
+
     return MatchResult(
         job_id=job.id,
         profile_id=profile.id or 0,
@@ -272,6 +310,7 @@ def score_job(
         reasons=list(dict.fromkeys(reasons))[:8],
         gaps=list(dict.fromkeys(gaps))[:10],
         requirements=coverage_result.table,
+        meta=meta,
     )
 
 
@@ -290,10 +329,13 @@ def score_all(
         params.append(limit)
     rows = conn.execute(sql, params).fetchall()
     scored = 0
+    comp_counts: dict[str, int] = {}
     for row in rows:
         job = db._job_from_row(row)
         result = score_job(job, profile, prefs)
         if job.id is not None:
             db.set_match(conn, result)
             scored += 1
-    return {"scored": scored, "total": len(rows)}
+            verdict = str(result.meta.get("comp", {}).get("verdict", "unknown"))
+            comp_counts[verdict] = comp_counts.get(verdict, 0) + 1
+    return {"scored": scored, "total": len(rows), "comp": comp_counts}
