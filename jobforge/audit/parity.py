@@ -55,6 +55,7 @@ CHECKS: list[tuple[str, str, str]] = [
     ("Audit log", "jobforge/db.py", "CREATE TABLE IF NOT EXISTS events"),
     ("Rate limiting", "jobforge/sources/base.py", "class RateLimiter"),
     ("Offline mode", "jobforge/db.py", "sqlite3"),
+    ("GitHub repository context", "jobforge/integrations/github.py", "def connect_github"),
 ]
 
 

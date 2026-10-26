@@ -10,7 +10,8 @@ Built as an independent clean-room replacement for the useful parts of paid auto
 |---|---|
 | **Discover** | Pulls jobs from Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Workday, USAJobs, and NYC Open Data public APIs; accepts a pasted job URL |
 | **Decide** | Scores each job as `weighted skill coverage × hard-gate survival`, with reasons, gaps, and a per-requirement table |
-| **Prepare** | Selects the most relevant verified bullets, reorders skills, optionally writes a grounded summary, renders a one-page Typst PDF, and checks the text layer |
+| **Prepare** | Selects the most relevant verified bullets, reorders grouped skills, and renders the refined resume-forge one-page Typst layout |
+| **Connect** | Optional read-only GitHub connection: syncs owner repositories and README context into reviewable project drafts, then adds only the projects you approve |
 | **Apply** | Opens a persistent Chromium window, fills the form, uploads the resume, screenshots the result, and **stops**. You review and click Submit |
 | **Track** | Stores applications, answers, statuses, events, and (optionally) IMAP messages with verification codes and reply classification |
 | **Warm path** | Reads a local `network.yml`, finds contacts at the employer, and recommends referral-first vs. cold channel without changing the stored fit score |
@@ -24,6 +25,8 @@ Built as an independent clean-room replacement for the useful parts of paid auto
 - No employer account creation or password storage.
 - No payments, referrals, affiliate, gifts, or enterprise multi-tenancy.
 - No cloud account, telemetry, or npm build step.
+- No automatic GitHub-to-resume import. Repository context is a draft; you review the project name, tech line, bullets, and tags before they enter the fact bank.
+- No raw GitHub API or README data is sent to an LLM. If you import bullets, they become normal profile facts; the optional cover-letter LLM then sees only the same approved facts as the rest of your resume.
 
 ## Install from GitHub (recommended)
 
@@ -68,7 +71,7 @@ uv tool install --from git+ssh://git@github.com/Taf0711/jobforge.git jobforge
 For a reproducible release, pin the tag:
 
 ```bash
-uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.4.1" jobforge
+uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.4.2" jobforge
 ```
 
 `jobforge setup` writes config, data, output, and browser state under a per-user
@@ -107,10 +110,23 @@ uv tool install --from . jobforge
 jobforge app
 ```
 
+### First-run setup wizard
+
+The first empty launch redirects to `/setup`, a four-step local wizard:
+
+1. **Profile** — use the existing profile or upload a resume/profile file.
+2. **Targets** — titles, locations, work modes, experience, salary, match floor,
+   sponsorship/relocation.
+3. **Sources** — curated direct-ATS/public-sector presets plus custom boards.
+4. **Ready** — profile/sources/GitHub/Typst/browser checklist, then finish or skip.
+
+No account, email capture, or telemetry. You can skip and return from the
+**Setup** link; preferences and profile stay editable in Settings/Profiles.
+
 ### First useful run
 
 1. `import-profile` parses the resume into contact, experience, education, projects, skills, and a fact bank.
-2. Add 5–20 target company board slugs to `config.yml`. Examples:
+2. Add target boards in the Setup wizard or `config.yml`. Examples:
    - Greenhouse: `stripe`, `discord`, `figma`
    - Lever: `leverdemo`, `spotify`
    - Ashby: `linear`, `ramp`
@@ -119,7 +135,9 @@ jobforge app
 3. `scan` fetches and deduplicates jobs by fingerprint.
 4. `score` fills the match table. The dashboard's **Run scan** scores newly
    discovered jobs automatically; the CLI keeps `scan` and `score` separate.
-5. Open a job → **Tailor resume** → **Fill application**.
+5. Optional: open **Connections** → **GitHub**, connect a read-only token, and
+   turn the relevant repositories into reviewed project drafts.
+6. Open a job → **Tailor resume** → **Fill application**.
 
 ### Already using resume-forge?
 
@@ -138,6 +156,27 @@ jobforge import-resume-forge \
 ```
 
 See `docs/16-resume-forge.md` for the mapping and status conversion.
+
+### GitHub connections
+
+Open **Connections** after setup. JobForge uses a read-only personal access
+token (not an OAuth login), so there is no bundled client secret and no callback
+server.
+
+1. Create a fine-grained token with **Contents: read** and **Metadata: read** for
+   public repositories, or for selected private repositories.
+2. Paste it at `/connections`. It is stored in the OS keychain when available;
+   otherwise JobForge writes a `0600` file and says so. You can instead run with
+   `GITHUB_TOKEN` or `JOBFORGE_GITHUB_TOKEN` set and store no copy.
+3. Sync owner repositories, open one, and review the README-derived suggestions.
+4. Edit the project name, tech line, bullets, and tags. Submit the form to add it
+   to the project bank. JobForge optionally adds detected skills and rescores
+   jobs.
+5. The normal resume renderer picks the three most JD-relevant live projects.
+   Syncing alone never changes the resume.
+
+Disconnecting removes the token and cached repository metadata; imported
+projects stay. Full details and limitations: `docs/20-connections.md`.
 
 ## Commands
 
@@ -185,13 +224,17 @@ Workday is supervised on purpose: if the page shows an account wall or password 
 `scan.max_new` caps new rows per scan (deferred rows are picked up by later
 scans). USAJobs is dormant until `USAJOBS_API_KEY` and `USAJOBS_EMAIL` are set.
 
-Secrets are **environment variables only**:
+Provider secrets are never written to `config.yml`. LLM and IMAP credentials
+come from environment variables; the GitHub token uses the OS keychain, a
+`0600` local fallback, or an environment variable:
 
 ```bash
 export JOBFORGE_LLM_API_KEY=...        # optional, OpenAI-compatible endpoint
 export JOBFORGE_LLM_BASE_URL=http://localhost:11434/v1
 export JOBFORGE_LLM_MODEL=llama3.1:8b
 export JOBFORGE_IMAP_PASSWORD=...      # optional, app password
+export GITHUB_TOKEN=...                # optional; preferred over storing a copy
+# or: export JOBFORGE_GITHUB_TOKEN=...
 ```
 
 The app works with no LLM: tailoring falls back to deterministic selection and a template cover letter. With a local Ollama endpoint, no profile data leaves the machine.
@@ -247,7 +290,7 @@ NYC uses a $130k target floor and a $105k exception floor; below $105k is a skip
 ## Resume safety
 
 - Tailoring selects and reorders **facts from your resume**. It does not invent employers, dates, metrics, or skills.
-- If an LLM is enabled, its summary must pass a number-support check against the fact bank; otherwise the deterministic summary is used.
+- The tailored resume uses verified bullets and the resume-forge layout without an LLM-written summary. Optional cover letters pass the same number/skill grounding check; unsupported text falls back to the deterministic letter.
 - The generated PDF is checked for one page, a text layer, contact details, section headers, images, and encoding damage.
 - You still read the PDF before sending it. The check is a floor, not a guarantee.
 
@@ -257,6 +300,7 @@ NYC uses a $130k target floor and a $105k exception floor; below $105k is a skip
 jobforge/
   paths.py       source-checkout vs. installed app-home paths
   sources/       ATS discovery adapters + direct URL fetch
+  integrations/  resume-forge import + GitHub connection/project context
   matching/      resume parse, JD parse, skill graph, score
   tailoring/     fact selection, LLM grounding, Typst render, ATS check
   automation/    browser session, generic filler, ATS adapters, answer bank
@@ -265,7 +309,7 @@ jobforge/
   quality.py     pre-submit quality gate (score, blockers, warnings)
   risk.py        explicit opt-in risk policy, daily cap, consent record
   email/         IMAP poller, verification codes, reply classification, code bridge
-  web/           FastAPI dashboard, answers editor, risk settings, Jinja templates
+  web/           FastAPI dashboard, answers editor, risk settings, connections, templates
   audit/         parity and static security checks
   data/          packaged config example
 pyproject.toml   installable package + `jobforge` entry point
@@ -286,6 +330,8 @@ docs/
   15-packaging.md      install, app home, release build
   16-resume-forge.md   import the personal verified profile/projects/tracker
   18-source-presets.md  reference direct-ATS board/scan preset
+  19-onboarding.md     first-run wizard and competitor patterns
+  20-connections.md    GitHub token, repository context, review gate, limits
 ```
 
 ## Tests
@@ -297,7 +343,7 @@ make eval        # 6 fixture-driven ATS adapters
 make e2e         # offline FastAPI + Typst smoke
 ```
 
-The test suite covers DB CRUD/dedup/events, salary and HTML normalization, ATS detection, resume parsing, JD section parsing, skill extraction, partial credit, hard gates, title penalties, thin-JD caps, Typst render, blocking ATS checks, web page rendering, SSRF rejection, the security scan, warm-path routing, the verification-code bridge, the answers editor, Workday parsing/account-wall/pagination, the supervised queue, the quality gate, risk consent and the unattended-submit cap, re-tailor state preservation, grounded letters, upload targeting, auto-submit confirmation, packaging paths, the launcher, and the six-fixture adapter eval.
+The test suite covers DB CRUD/dedup/events, salary and HTML normalization, ATS detection, resume parsing, JD section parsing, skill extraction, partial credit, hard gates, title penalties, thin-JD caps, Typst render, blocking ATS checks, web page rendering, SSRF rejection, the security scan, warm-path routing, the verification-code bridge, the answers editor, Workday parsing/account-wall/pagination, the supervised queue, the quality gate, risk consent and the unattended-submit cap, re-tailor state preservation, grounded letters, upload targeting, auto-submit confirmation, packaging paths, the launcher, GitHub token storage/README suggestions/project import and disconnect, and the six-fixture adapter eval.
 
 Deterministic gates:
 

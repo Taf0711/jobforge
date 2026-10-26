@@ -55,8 +55,8 @@ jobforge serve              # server only, no browser
 
 ```bash
 uv build
-# dist/jobforge-0.4.1-py3-none-any.whl
-# dist/jobforge-0.4.1.tar.gz
+# dist/jobforge-0.4.2-py3-none-any.whl
+# dist/jobforge-0.4.2.tar.gz
 ```
 
 The wheel packages:

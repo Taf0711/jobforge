@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Connections · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Integrations</p>
+    <h1>Connections</h1>
+    <p class="muted">Pull context from tools you already use. A connection stays local until you explicitly add a project to your resume.</p>
+  </div>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>GitHub</h2>
+      {% if connection %}<span class="pill">connected</span>{% else %}<span class="pill">not connected</span>{% endif %}
+    </div>
+
+    {% if connection %}
+      <p><strong>@{{ connection.login }}</strong>{% if connection.display_name %} · {{ connection.display_name }}{% endif %}</p>
+      <table class="compact"><tbody>
+        <tr><td>Repositories cached</td><td>{{ repo_count }}</td></tr>
+        <tr><td>Imported into resume</td><td>{{ imported_count }} project{{ 's' if imported_count != 1 else '' }}</td></tr>
+        <tr><td>Last synced</td><td>{{ connection.last_sync_at or 'not synced' }}</td></tr>
+        <tr><td>Token storage</td><td>{{ token_backend_label }}</td></tr>
+        <tr><td>Token scopes</td><td>{{ connection.scopes or 'fine-grained / none reported' }}</td></tr>
+      </tbody></table>
+
+      <div class="actions" style="margin-top: 14px">
+        <a class="button" href="/connections/github">Browse repositories</a>
+        <form method="post" action="/connections/github/sync" class="inline"><button>Sync repositories</button></form>
+        <form method="post" action="/connections/github/disconnect" class="inline"><button class="ghost">Disconnect</button></form>
+      </div>
+      <p class="setup-note">Syncing refreshes repository metadata and keeps the README context already fetched. Disconnecting removes the token and cached repository data; projects you imported stay in the resume bank.</p>
+    {% else %}
+      <p class="muted">Connect GitHub to browse your repositories, read their README context, and turn the relevant ones into reviewable resume projects.</p>
+      <form method="post" action="/connections/github/connect" class="stack">
+        <label>Personal access token
+          <input type="password" name="token" autocomplete="off" spellcheck="false" placeholder="github_pat_... or ghp_...">
+        </label>
+        <p class="setup-note">Public repositories only need read-only access. Grant private repository access only if you want those repositories available here. The token is sent only to <code>api.github.com</code>.</p>
+        <button class="primary">Connect GitHub</button>
+      </form>
+      {% if env_token %}
+        <form method="post" action="/connections/github/connect" style="margin-top: 10px">
+          <button class="ghost">Use GITHUB_TOKEN from the environment</button>
+        </form>
+      {% endif %}
+      <p class="setup-note">Create a token at <a class="link" href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">github.com/settings/tokens</a>. Fine-grained tokens with read-only repository access are enough.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2>What GitHub context does</h2>
+    <ol class="reasons">
+      <li>Syncs repository names, descriptions, languages, topics, stars, and last-push dates.</li>
+      <li>Fetches the README for a repository when you open it, and extracts a few suggested bullets from overview/features sections.</li>
+      <li>Lets you edit the project name, tech line, bullets, and tags before anything enters the project bank.</li>
+      <li>Adds detected skills to your profile and rescored existing jobs when you confirm an import.</li>
+    </ol>
+    <p class="muted">The resume renderer only uses the bullets you approve. GitHub metadata is context, not a claim; nothing is auto-added to a resume or application.</p>
+    <p class="setup-note">Token storage: {% if keyring_available %}the OS keychain when available{% else %}a local file with 0600 permissions{% endif %}. You can also run JobForge with <code>GITHUB_TOKEN</code> set and avoid storing a copy.</p>
+  </div>
+</section>
+{% endblock %}

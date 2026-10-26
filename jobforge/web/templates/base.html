@@ -17,6 +17,8 @@
       <a href="/answers" class="{{ 'active' if request.url.path.startswith('/answers') else '' }}">Answers</a>
       <a href="/inbox" class="{{ 'active' if request.url.path.startswith('/inbox') else '' }}">Inbox</a>
       <a href="/profiles" class="{{ 'active' if request.url.path.startswith('/profiles') else '' }}">Profiles</a>
+      <a href="/connections" class="{{ 'active' if request.url.path.startswith('/connections') else '' }}">Connections</a>
+      <a href="/setup" class="{{ 'active' if request.url.path.startswith('/setup') else '' }}">Setup</a>
       <a href="/settings" class="{{ 'active' if request.url.path.startswith('/settings') else '' }}">Settings</a>
       <a href="/runs" class="{{ 'active' if request.url.path.startswith('/runs') else '' }}">Runs</a>
     </nav>
@@ -24,6 +26,9 @@
   </header>
 
   {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+  {% if setup_incomplete and not request.url.path.startswith('/setup') %}
+  <div class="flash setup-flash">Setup is incomplete. <a href="/setup">Finish setup</a> to choose your sources and targets.</div>
+  {% endif %}
 
   <main>
     {% block content %}{% endblock %}

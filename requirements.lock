@@ -9,6 +9,8 @@ anyio==4.15.1
     #   httpx
     #   starlette
     #   watchfiles
+backports-tarfile==1.2.0
+    # via jaraco-context
 beautifulsoup4==4.15.0
     # via -r requirements.txt
 certifi==2026.10.23
@@ -41,12 +43,26 @@ idna==3.20
     #   anyio
     #   httpx
     #   requests
+importlib-metadata==10.1.0
+    # via keyring
 iniconfig==2.3.1
     # via pytest
+jaraco-classes==3.4.0
+    # via keyring
+jaraco-context==6.1.2
+    # via keyring
+jaraco-functools==4.6.0
+    # via keyring
 jinja2==3.1.6
+    # via -r requirements.txt
+keyring==25.7.0
     # via -r requirements.txt
 markupsafe==3.0.4
     # via jinja2
+more-itertools==11.2.1
+    # via
+    #   jaraco-classes
+    #   jaraco-functools
 networkx==3.6.1
     # via pymupdf
 numpy==2.4.6
@@ -127,3 +143,5 @@ watchfiles==1.3.0
     # via uvicorn
 websockets==17.3
     # via uvicorn
+zipp==4.1.2
+    # via importlib-metadata

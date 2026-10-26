@@ -19,6 +19,18 @@
     });
   });
 
+  document.querySelectorAll('form[action$="/disconnect"]').forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (!window.confirm("Disconnect GitHub? The token and cached repository data will be removed. Imported resume projects stay.")) event.preventDefault();
+    });
+  });
+
+  document.querySelectorAll('form[action$="/remove"]').forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (!window.confirm("Remove this project from your resume bank?")) event.preventDefault();
+    });
+  });
+
   // "/" focuses the search box.
   document.addEventListener("keydown", function (event) {
     if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;

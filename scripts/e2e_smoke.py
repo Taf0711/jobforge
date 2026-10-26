@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -43,6 +44,8 @@ from jobforge.config import (  # noqa: E402
 from jobforge.models import ApplicationStatus, Job, Profile  # noqa: E402
 from jobforge.web.app import create_app  # noqa: E402
 
+os.environ.setdefault("JOBFORGE_DISABLE_KEYRING", "1")
+
 CANDIDATE_FIRST = "Jane"
 CANDIDATE_LAST = "Doe"
 CANDIDATE_NAME = f"{CANDIDATE_FIRST} {CANDIDATE_LAST}"
@@ -58,6 +61,7 @@ PAGES = (
     "/applications",
     "/answers",
     "/profiles",
+    "/connections",
     "/settings",
     "/inbox",
     "/runs",

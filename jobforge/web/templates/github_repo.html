@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.full_name }} · GitHub · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Connections / GitHub / Review</p>
+    <h1>{{ repo.full_name }}</h1>
+    <p class="muted">
+      {% if repo.private %}<span class="pill">private</span>{% endif %}
+      {% if repo.fork %}<span class="pill">fork</span>{% endif %}
+      {% if repo.archived %}<span class="pill bad">archived</span>{% endif %}
+      {% if repo.language %}<span class="pill">{{ repo.language }}</span>{% endif %}
+      {% if repo.stars %}<span class="pill">{{ repo.stars }} stars</span>{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="button" href="/connections/github">Back to repositories</a>
+    <a class="button" href="{{ repo.html_url }}" target="_blank" rel="noopener">Open on GitHub</a>
+  </div>
+</section>
+
+{% if context_error %}
+<div class="flash setup-flash">Could not fetch fresh README context: {{ context_error }}. You can still edit the cached project fields.</div>
+{% endif %}
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Repository context</h2>{% if project %}<span class="pill">in resume</span>{% endif %}</div>
+    <p>{{ repo.description or 'No repository description.' }}</p>
+    <table class="compact"><tbody>
+      <tr><td>Languages</td><td>{{ repo.languages.keys()|join(', ') if repo.languages else repo.language or '—' }}</td></tr>
+      <tr><td>Topics</td><td>{% for topic in repo.topics %}<span class="chip">{{ topic }}</span>{% else %}—{% endfor %}</td></tr>
+      <tr><td>Last push</td><td>{{ repo.pushed_at or '—' }}</td></tr>
+      <tr><td>URL</td><td><a class="link" href="{{ repo.html_url }}" target="_blank" rel="noopener">{{ repo.full_name }}</a></td></tr>
+    </tbody></table>
+
+    {% if repo.tags %}
+      <h3>Detected skills</h3>
+      <p class="chips">{% for tag in repo.tags[:24] %}<span class="chip">{{ tag }}</span>{% endfor %}</p>
+    {% endif %}
+
+    <div class="actions" style="margin-top: 12px">
+      <form method="post" action="/connections/github/repos/{{ repo.repo_id }}/refresh" class="inline"><button>Refresh README and languages</button></form>
+      {% if project %}
+      <form method="post" action="/connections/github/repos/{{ repo.repo_id }}/remove" class="inline"><button class="ghost">Remove from resume</button></form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>{{ 'Edit project' if project else 'Add to resume' }}</h2></div>
+    <p class="setup-note">The suggested bullets are extracted from your README. Edit them to match what you actually built. Nothing is added until you submit this form.</p>
+    <form method="post" action="/connections/github/repos/{{ repo.repo_id }}/import" class="stack">
+      <label>Project name
+        <input name="title" value="{{ title_value }}" maxlength="120" required>
+      </label>
+      <label>Tech line <span class="muted">(shown beside the project name)</span>
+        <input name="tech_line" value="{{ tech_line_value }}" maxlength="220" placeholder="Python, FastAPI, PostgreSQL">
+      </label>
+      <label>Bullets <span class="muted">(one per line, max 5)</span>
+        <textarea name="bullets" rows="6" placeholder="Built ...">{{ bullets_value }}</textarea>
+      </label>
+      <label>Tags <span class="muted">(comma-separated; used for JD matching)</span>
+        <input name="tags" value="{{ tags_value }}" maxlength="600" placeholder="Python, FastAPI, SQL">
+      </label>
+      <label class="check"><input type="checkbox" name="add_skills" value="1" {{ 'checked' if not project else '' }}> Add detected skills to my profile and rescore jobs</label>
+      <div class="actions">
+        <button class="primary">{{ 'Update project' if project else 'Add to project bank' }}</button>
+        {% if suggested %}<span class="muted">Draft from {{ repo.full_name }}</span>{% endif %}
+      </div>
+    </form>
+  </div>
+</section>
+
+{% if readme_excerpt %}
+<section class="panel">
+  <div class="panel-head"><h2>README</h2><span class="muted">Context only; review before using any claim</span></div>
+  <pre class="readme">{{ readme_excerpt }}</pre>
+</section>
+{% endif %}
+{% endblock %}

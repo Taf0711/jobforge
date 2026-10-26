@@ -55,6 +55,9 @@ preferences:
   min_match: 55
   one_application_per_company: true
 
+# GitHub is connected from the dashboard (Connections). It is intentionally
+# absent here. Set GITHUB_TOKEN or JOBFORGE_GITHUB_TOKEN to avoid storing a copy.
+
 llm:
   enabled: false
   base_url: "http://localhost:11434/v1"

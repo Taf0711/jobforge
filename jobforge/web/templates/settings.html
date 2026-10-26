@@ -12,8 +12,8 @@
       <label>Target titles <span class="muted">(comma-separated, max 5)</span>
         <input name="titles" value="{{ prefs.titles|join(', ') }}" placeholder="Software Engineer, Backend Engineer">
       </label>
-      <label>Locations <span class="muted">(comma-separated)</span>
-        <input name="locations" value="{{ prefs.locations|join(', ') }}" placeholder="New York, NY, Remote">
+      <label>Locations <span class="muted">(semicolon-separated)</span>
+        <input name="locations" value="{{ prefs.locations|join('; ') }}" placeholder="New York, NY; Remote">
       </label>
       <div class="row">
         <label>Work modes <input name="work_modes" value="{{ prefs.work_modes|join(', ') }}" placeholder="remote, hybrid, onsite"></label>
@@ -46,7 +46,7 @@
     </tbody></table>
 
     <h3>Source boards</h3>
-    <p class="muted">Edit <code>config.yml</code> to add boards, then run a scan.</p>
+    <p class="muted">Use the guided <a href="/setup">Setup</a> page for presets, or edit <code>config.yml</code> directly, then run a scan.</p>
     <table class="compact"><tbody>
       {% for name, boards in boards.items() %}
       <tr><td>{{ name }}</td><td class="muted">{{ boards|join(', ') if boards else '—' }}</td></tr>

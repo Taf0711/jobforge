@@ -19,7 +19,7 @@ from .models import (
     utcnow,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -148,6 +148,46 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS connections (
+    provider TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL DEFAULT '',
+    login TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    scopes TEXT NOT NULL DEFAULT '',
+    token_backend TEXT NOT NULL DEFAULT '',
+    connected_at TEXT NOT NULL,
+    last_sync_at TEXT,
+    meta_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS github_repos (
+    repo_id INTEGER PRIMARY KEY,
+    owner TEXT NOT NULL DEFAULT '',
+    full_name TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    html_url TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    homepage TEXT NOT NULL DEFAULT '',
+    language TEXT NOT NULL DEFAULT '',
+    languages_json TEXT NOT NULL DEFAULT '{}',
+    topics_json TEXT NOT NULL DEFAULT '[]',
+    stars INTEGER NOT NULL DEFAULT 0,
+    forks INTEGER NOT NULL DEFAULT 0,
+    private INTEGER NOT NULL DEFAULT 0,
+    fork INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    pushed_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT '',
+    readme TEXT NOT NULL DEFAULT '',
+    tech_line TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    suggested_bullets_json TEXT NOT NULL DEFAULT '[]',
+    ignored INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_github_repos_pushed ON github_repos(pushed_at);
+CREATE INDEX IF NOT EXISTS idx_github_repos_name ON github_repos(full_name);
 """
 
 
@@ -722,6 +762,215 @@ def setting_set(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Connections and imported GitHub context
+
+def save_connection(
+    conn: sqlite3.Connection,
+    provider: str,
+    *,
+    account_id: str = "",
+    login: str = "",
+    display_name: str = "",
+    scopes: str = "",
+    token_backend: str = "",
+    meta: dict[str, Any] | None = None,
+) -> None:
+    now = utcnow()
+    conn.execute(
+        """
+        INSERT INTO connections
+            (provider, account_id, login, display_name, scopes, token_backend,
+             connected_at, last_sync_at, meta_json)
+        VALUES (?,?,?,?,?,?,?,NULL,?)
+        ON CONFLICT(provider) DO UPDATE SET
+            account_id=excluded.account_id,
+            login=excluded.login,
+            display_name=excluded.display_name,
+            scopes=excluded.scopes,
+            token_backend=excluded.token_backend,
+            connected_at=excluded.connected_at,
+            meta_json=excluded.meta_json
+        """,
+        (
+            provider,
+            account_id,
+            login,
+            display_name,
+            scopes,
+            token_backend,
+            now,
+            json.dumps(meta or {}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+
+def get_connection(conn: sqlite3.Connection, provider: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM connections WHERE provider=?", (provider,)).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    data["meta"] = json.loads(data.pop("meta_json") or "{}")
+    return data
+
+def touch_connection_sync(conn: sqlite3.Connection, provider: str) -> None:
+    conn.execute(
+        "UPDATE connections SET last_sync_at=? WHERE provider=?", (utcnow(), provider)
+    )
+    conn.commit()
+
+def delete_connection(conn: sqlite3.Connection, provider: str) -> None:
+    conn.execute("DELETE FROM connections WHERE provider=?", (provider,))
+    conn.commit()
+
+def _github_repo_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    data = dict(row)
+    data["languages"] = json.loads(data.pop("languages_json") or "{}")
+    data["topics"] = json.loads(data.pop("topics_json") or "[]")
+    data["tags"] = json.loads(data.pop("tags_json") or "[]")
+    data["suggested_bullets"] = json.loads(data.pop("suggested_bullets_json") or "[]")
+    data["private"] = bool(data.get("private"))
+    data["fork"] = bool(data.get("fork"))
+    data["archived"] = bool(data.get("archived"))
+    data["ignored"] = bool(data.get("ignored"))
+    return data
+
+def upsert_github_repos(conn: sqlite3.Connection, repos: Iterable[dict[str, Any]]) -> int:
+    """Upsert repository metadata; preserve cached README context on resync."""
+    count = 0
+    now = utcnow()
+    for repo in repos:
+        repo_id = int(repo.get("repo_id") or repo.get("id") or 0)
+        if not repo_id:
+            continue
+        conn.execute(
+            """
+            INSERT INTO github_repos
+                (repo_id, owner, full_name, name, html_url, description, homepage,
+                 language, languages_json, topics_json, stars, forks, private, fork,
+                 archived, pushed_at, created_at, readme, tech_line, tags_json,
+                 suggested_bullets_json, ignored, synced_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)
+            ON CONFLICT(repo_id) DO UPDATE SET
+                owner=excluded.owner,
+                full_name=excluded.full_name,
+                name=excluded.name,
+                html_url=excluded.html_url,
+                description=excluded.description,
+                homepage=excluded.homepage,
+                language=excluded.language,
+                languages_json=CASE WHEN excluded.languages_json='{}'
+                    THEN github_repos.languages_json ELSE excluded.languages_json END,
+                topics_json=excluded.topics_json,
+                stars=excluded.stars,
+                forks=excluded.forks,
+                private=excluded.private,
+                fork=excluded.fork,
+                archived=excluded.archived,
+                pushed_at=excluded.pushed_at,
+                created_at=excluded.created_at,
+                readme=CASE WHEN excluded.readme='' THEN github_repos.readme ELSE excluded.readme END,
+                tech_line=CASE WHEN github_repos.tech_line='' THEN excluded.tech_line ELSE github_repos.tech_line END,
+                tags_json=CASE WHEN excluded.tags_json='[]' THEN github_repos.tags_json ELSE excluded.tags_json END,
+                suggested_bullets_json=CASE WHEN excluded.suggested_bullets_json='[]'
+                    THEN github_repos.suggested_bullets_json ELSE excluded.suggested_bullets_json END,
+                synced_at=excluded.synced_at
+            """,
+            (
+                repo_id,
+                str(repo.get("owner") or ""),
+                str(repo.get("full_name") or ""),
+                str(repo.get("name") or ""),
+                str(repo.get("html_url") or ""),
+                str(repo.get("description") or ""),
+                str(repo.get("homepage") or ""),
+                str(repo.get("language") or ""),
+                json.dumps(repo.get("languages") or {}, ensure_ascii=False),
+                json.dumps(repo.get("topics") or [], ensure_ascii=False),
+                int(repo.get("stars") or 0),
+                int(repo.get("forks") or 0),
+                int(bool(repo.get("private"))),
+                int(bool(repo.get("fork"))),
+                int(bool(repo.get("archived"))),
+                str(repo.get("pushed_at") or ""),
+                str(repo.get("created_at") or ""),
+                str(repo.get("readme") or ""),
+                str(repo.get("tech_line") or ""),
+                json.dumps(repo.get("tags") or [], ensure_ascii=False),
+                json.dumps(repo.get("suggested_bullets") or [], ensure_ascii=False),
+                now,
+            ),
+        )
+        count += 1
+    conn.commit()
+    return count
+
+def list_github_repos(
+    conn: sqlite3.Connection,
+    q: str = "",
+    *,
+    include_ignored: bool = False,
+    limit: int = 300,
+) -> list[dict[str, Any]]:
+    where = ["1=1"]
+    params: list[Any] = []
+    if not include_ignored:
+        where.append("ignored=0")
+    if q.strip():
+        like = f"%{q.strip()}%"
+        where.append("(full_name LIKE ? OR description LIKE ? OR language LIKE ? OR topics_json LIKE ?)")
+        params.extend([like, like, like, like])
+    rows = conn.execute(
+        f"SELECT * FROM github_repos WHERE {' AND '.join(where)} "
+        "ORDER BY archived ASC, pushed_at DESC, full_name ASC LIMIT ?",
+        [*params, limit],
+    ).fetchall()
+    return [_github_repo_from_row(row) for row in rows]
+
+def get_github_repo(conn: sqlite3.Connection, repo_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM github_repos WHERE repo_id=?", (repo_id,)).fetchone()
+    return _github_repo_from_row(row) if row else None
+
+def update_github_repo_context(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    *,
+    readme: str,
+    languages: dict[str, Any] | None = None,
+    tech_line: str = "",
+    tags: list[str] | None = None,
+    suggested_bullets: list[str] | None = None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE github_repos SET readme=?, languages_json=?, tech_line=?, tags_json=?,
+            suggested_bullets_json=?, synced_at=?
+        WHERE repo_id=?
+        """,
+        (
+            readme,
+            json.dumps(languages or {}, ensure_ascii=False),
+            tech_line,
+            json.dumps(tags or [], ensure_ascii=False),
+            json.dumps(suggested_bullets or [], ensure_ascii=False),
+            utcnow(),
+            repo_id,
+        ),
+    )
+    conn.commit()
+
+def set_github_repo_ignored(conn: sqlite3.Connection, repo_id: int, ignored: bool) -> None:
+    conn.execute("UPDATE github_repos SET ignored=? WHERE repo_id=?", (int(ignored), repo_id))
+    conn.commit()
+
+def clear_github_repos(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM github_repos")
+    conn.commit()
+
+def count_github_repos(conn: sqlite3.Connection, *, include_ignored: bool = False) -> int:
+    where = "" if include_ignored else " WHERE ignored=0"
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM github_repos{where}").fetchone()
+    return int(row["n"] if row else 0)
+
 # Stats / export
 # ---------------------------------------------------------------------------
 
@@ -759,6 +1008,8 @@ def export_all(conn: sqlite3.Connection) -> dict[str, Any]:
         "saved_jobs",
         "hidden_jobs",
         "settings",
+        "connections",
+        "github_repos",
     ]
     out: dict[str, Any] = {}
     for table in tables:
@@ -780,6 +1031,8 @@ def delete_all(conn: sqlite3.Connection) -> None:
         "jobs",
         "runs",
         "settings",
+        "connections",
+        "github_repos",
     ]:
         conn.execute(f"DELETE FROM {table}")
     conn.commit()

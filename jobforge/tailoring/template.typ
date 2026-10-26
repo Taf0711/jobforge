@@ -1,92 +1,128 @@
-#set page(
-  paper: "us-letter",
-  margin: (top: 0.42in, bottom: 0.42in, left: 0.55in, right: 0.55in),
-)
-#set text(font: "New Computer Modern", size: 10pt, fill: black)
-#set par(leading: 0.42em, spacing: 0.55em, justify: false)
+// Resume in Typst — resume-forge visual language.
+// Data comes from data.json; the layout mirrors the refined base resume.
 
 #let d = json("data.json")
 #let has(x) = x != none and x != ""
-#let contact = d.contact.filter(x => has(x)).join(" | ")
+#set document(title: d.name + " Resume")
+#set page(
+  paper: "us-letter",
+  margin: (top: 0.12in, bottom: 0.12in, left: 0.2in, right: 0.2in),
+)
+#set text(font: "New Computer Modern", size: 11pt)
+#set par(justify: false, leading: 0.28em)
+
+#let section(title) = {
+  v(6pt)
+  text(weight: "regular", size: 10pt, smallcaps(title))
+  v(-9pt)
+  line(length: 100%, stroke: 0.5pt)
+  v(-5pt)
+}
+
+#let subheading(title, date, subtitle, location) = {
+  v(5pt)
+  grid(
+    columns: (1fr, auto),
+    align: (left, right),
+    text(weight: "bold", title),
+    text(date),
+  )
+  v(-7pt)
+  grid(
+    columns: (1fr, auto),
+    align: (left, right),
+    text(style: "italic", size: 9pt, subtitle),
+    text(style: "italic", size: 9pt, location),
+  )
+  v(-2pt)
+}
+
+#let project-heading(p) = {
+  v(4pt)
+  text(size: 9.5pt)[
+    #strong(p.name)
+    #if has(p.tech_line) [ | #emph(p.tech_line) ]
+    #if has(p.url) [ | #link(p.url)[GitHub] ]
+  ]
+  v(-2pt)
+}
+
+#let items(..values) = {
+  v(-3pt)
+  for item in values.pos() {
+    grid(
+      columns: (7pt, 1fr),
+      align: (right, left),
+      text(size: 9pt, "•"),
+      h(2pt) + text(size: 9pt, item),
+    )
+    v(-3.5pt)
+  }
+  v(-3pt)
+}
+
 #let daterange(e) = if has(e.start) and has(e.end) {
-  e.start + " -- " + e.end
+  e.start + " - " + e.end
 } else if has(e.end) {
   e.end
 } else {
   ""
 }
-#let section(title) = block(width: 100%, above: 0.7em, below: 0.3em)[
-  #text(10.5pt, weight: "bold", upper(title))
-  #v(-0.12em)
-  #line(length: 100%, stroke: 0.6pt + black)
-]
 
+// Header
 #align(center)[
-  #text(17pt, weight: "bold")[#d.name]
-  #linebreak()
-  #text(9pt)[#contact]
-]
-
-#if has(d.summary) [
-  #section("Summary")
-  #d.summary
-]
-
-#if d.experience.len() > 0 [
-  #section("Experience")
-  #for e in d.experience [
-    #grid(
-      columns: (1fr, auto),
-      column-gutter: 0.5em,
-      [#text(weight: "bold")[#e.title]#if has(e.company) [ — #e.company]],
-      [#align(right)[#daterange(e)]],
-    )
-    #if has(e.location) [
-      #text(style: "italic", size: 9pt)[#e.location]
+  #text(weight: "bold", size: 20pt, smallcaps(d.name))
+  #v(-5pt)
+  #text(size: 10pt)[
+    #for (i, item) in d.header.enumerate() [
+      #if i > 0 [ | ]
+      #if has(item.url) [#link(item.url)[#underline[#item.text]]] else [#item.text]
     ]
-    #for b in e.bullets [
-      - #b
-    ]
-    #v(0.25em)
   ]
 ]
 
-#if d.projects.len() > 0 [
-  #section("Projects")
-  #for p in d.projects [
-    #text(weight: "bold")[#p.name]#if has(p.description) [ — #p.description]
-    #for b in p.bullets [
-      - #b
-    ]
-    #v(0.25em)
-  ]
-]
-
+// Education
 #if d.education.len() > 0 [
   #section("Education")
   #for e in d.education [
-    #grid(
-      columns: (1fr, auto),
-      column-gutter: 0.5em,
-      [
-        #text(weight: "bold")[#e.institution]
-        #if has(e.degree) [ — #e.degree]
-        #if has(e.major) [#emph(e.major)]
-      ],
-      [#align(right)[#daterange(e)]],
-    )
-    #v(0.15em)
+    #subheading(e.institution, daterange(e), e.degree_line, e.location)
+    #if e.courses.len() > 0 [
+      #items([Relevant Courses: #e.courses.join(", ")])
+    ]
   ]
 ]
 
-#if d.certifications.len() > 0 [
-  #section("Certifications")
-  #for c in d.certifications [
-    - #c
+// Experience
+#if d.experience.len() > 0 [
+  #section("Experience")
+  #for e in d.experience [
+    #subheading(e.company, daterange(e), e.title, e.location)
+    #if e.bullets.len() > 0 [
+      #items(..e.bullets)
+    ]
   ]
 ]
 
-#if d.skills.len() > 0 [
-  #section("Skills")
-  #d.skills.join(", ")
+// Projects
+#if d.projects.len() > 0 [
+  #section("Projects")
+  #for p in d.projects [
+    #project-heading(p)
+    #if p.bullets.len() > 0 [
+      #items(..p.bullets)
+    ]
+  ]
+]
+
+// Technical Skills
+#if d.skill_groups.len() > 0 [
+  #section("Technical Skills")
+  #v(-3pt)
+  #set par(spacing: 0.22em)
+  #text(size: 8pt)[
+    #for group in d.skill_groups [
+      #strong(group.label): #group.items.join(", ")
+      #linebreak()
+    ]
+  ]
 ]

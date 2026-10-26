@@ -101,6 +101,19 @@ def _salary_range(text: str) -> tuple[int | None, int | None]:
     return min(values[:2]), max(values[:2])
 
 
+def _project_url(entry: dict[str, Any]) -> str:
+    for key in ("url", "link", "repo", "github", "source_url"):
+        value = _text(entry.get(key))
+        if value:
+            return value if value.startswith(("http://", "https://")) else "https://" + value
+    haystack = " ".join(
+        str(entry.get(key) or "")
+        for key in ("notes", "description", "tech_line")
+    ) + " " + " ".join(str(item) for item in entry.get("bullets", []) or [])
+    match = re.search(r"(?:https?://)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", haystack)
+    return f"https://{match.group(0).removeprefix('https://').removeprefix('http://')}" if match else ""
+
+
 def load_profile(
     profile_path: str | Path,
     *,
@@ -203,6 +216,9 @@ def load_profile(
                 "tags": tags,
                 "best_for": [str(item) for item in entry.get("best_for", []) or []],
                 "bullets": bullets,
+                "url": _project_url(entry),
+                "dead": bool(entry.get("dead") or entry.get("death_reason")),
+                "notes": _text(entry.get("notes")),
                 "source_id": f"proj-{index:02d}",
             }
         )
@@ -256,6 +272,13 @@ def _merge_resume_bullets(profile: Profile, resume_path: str | Path) -> None:
         (key(item.get("title", "")), key(item.get("company", ""))): item
         for item in parsed.experience
     }
+    parsed_education = parsed.education[0] if parsed.education else {}
+    for edu in profile.education:
+        for field in ("start", "end", "location"):
+            if not edu.get(field) and parsed_education.get(field):
+                edu[field] = parsed_education[field]
+        if not edu.get("courses") and parsed_education.get("courses"):
+            edu["courses"] = parsed_education["courses"]
     for entry in profile.experience:
         match = parsed_experience.get((key(entry.get("title", "")), key(entry.get("company", ""))))
         if match is None:

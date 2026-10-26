@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jobforge"
-version = "0.4.1"
+version = "0.4.2"
 description = "A local-first job search workbench: discover, score, tailor, fill, and track applications."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,6 +29,7 @@ dependencies = [
   "beautifulsoup4>=4.12",
   "python-multipart>=0.0.9",
   "playwright>=1.64",
+  "keyring>=25",
 ]
 
 [project.optional-dependencies]

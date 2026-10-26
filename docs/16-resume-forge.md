@@ -60,9 +60,39 @@ A profile can carry 13 projects. When `role_archetypes.yml` is present,
 `tailor_resume` detects the closest archetype from JD signals and boosts its
 `strongest_projects` list; remaining slots are filled by project tags,
 `best_for` labels, tech lines, and bullets scored against the JD title, skills,
-and a small domain map. Profiles with more than three projects use
-`template_compact.typ` (resume-forge-style margins, 9pt bullets, 8pt skills).
-The result is checked by the ATS gate and should stay on one page.
+and a small domain map. Dead projects (`dead: true` / `death_reason`) are
+excluded. At most three projects and three bullets per project are rendered.
+
+### Adding GitHub projects
+
+The optional **Connections → GitHub** flow appends reviewed GitHub repositories
+to the same project bank. Each imported project carries `source: github`,
+`source_id: github-<repo_id>`, its URL, tech line, tags, and fact-bank bullets.
+It competes with resume-forge projects using the same JD-relevance scoring.
+Syncing repositories does not alter the project bank; only the review form does.
+See `docs/20-connections.md`.
+
+## Resume layout
+
+Tailored output now uses the refined resume-forge Typst language from
+`resume.typ`:
+
+- header: 20pt small-caps name; phone, email, LinkedIn, GitHub, and explicit
+  U.S. citizenship;
+- section order: Education → Experience → Projects → Technical Skills;
+- education: institution, date range, degree/major, location, first eight
+  relevant courses;
+- experience: company/role/location/date range with verified bullets; the base
+  three roles stay on the page and later profile entries (e.g. mentorship)
+  remain off it;
+- projects: name | tech line | GitHub when known, with at most three bullets;
+- skills: resume-forge categories (Languages, Technologies, Concepts,
+  Developer Tools), JD terms pulled forward, exact base ordering otherwise;
+- margins/fonts: 0.12in vertical, 0.2in horizontal, New Computer Modern 11pt,
+  9pt bullets, 8pt skills; no summary or certifications.
+
+If the full layout exceeds one page, `template_compact.typ` keeps the same
+hierarchy with tighter margins/font; the ATS gate blocks a two-page result.
 
 ## Scoring gates folded in
 

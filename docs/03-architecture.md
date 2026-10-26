@@ -8,7 +8,7 @@ JobForge is a local-first, single-user replacement for the useful parts of Jobbi
 2. **Explainable.** Every score has reasons and gaps; every answer has a source fact.
 3. **Truthful.** Tailoring may reorder and rephrase verified facts; it may not invent.
 4. **Supervised.** The default loop fills the form and stops. The human reviews and submits.
-5. **Public data only.** ATS board APIs and public job pages; no Jobbie API, no scraping behind auth.
+5. **Public job data only.** ATS board APIs and public job pages; no Jobbie API, no scraping behind auth. An optional GitHub connection reads only the user's own repositories and keeps that context local.
 6. **No captcha arms race.** Detect, pause, hand control to the human.
 7. **Composable.** CLI and HTTP API share the same service layer.
 
@@ -28,6 +28,9 @@ jobforge/
     smartrecruiters.py
     direct.py        paste-a-URL fetch + ATS detection
     registry.py      source registry
+  integrations/
+    resume_forge.py  import verified profile/projects/evidence/network
+    github.py        GitHub token, repository context, project review/import
   matching/
     resume.py        PDF/DOCX/TXT → structured profile
     jd.py            JD → requirements
@@ -93,12 +96,12 @@ store match(reasons, gaps)
 
 ```
 Profile fact bank + Job requirements + Match gaps
-   → deterministic reorder/select (always)
-   → optional LLM rewrite constrained to fact IDs (if configured)
-   → fact-diff audit: reject any sentence not supported by a fact
-   → render template.typ
-   → typst compile → output/<company>/<role>.pdf
-   → ats_check
+   → select verified facts per entry (no LLM rewrite)
+   → select top 3 live projects; group/reorder skills
+   → render resume-forge template.typ (Education → Experience → Projects → Skills)
+   → typst compile → output/<company>/<role>-<job-id>/resume.pdf
+   → ats_check (one page, text layer, contact, sections, no images)
+   → optional grounded cover letter
 ```
 
 ### 3.4 Apply
@@ -121,6 +124,28 @@ IMAP poll → messages → verification codes / replies
    → append event + update application status
 ```
 
+### 3.6 Connect GitHub (optional)
+
+```
+personal access token → OS keychain / 0600 fallback / environment
+   → api.github.com /user and /user/repos (owner repos, capped)
+   → github_repos metadata cache
+   → open one repo → /languages + README (64 KB cap)
+   → suggested tech line, tags, bullets from overview/features sections
+   → human edits the project form
+   → Profile.projects + project facts + detected skills
+   → optional rescore
+   → normal JD-relevance selection at tailoring time
+```
+
+The review form is the truth boundary. Syncing metadata never edits the profile.
+README suggestions are the repository owner's text, not a model's claims. Raw
+README text is never passed to an LLM. Approved bullets become ordinary profile
+facts, so the optional cover-letter LLM sees them only as part of that fact bank.
+Disconnecting clears the token and repository cache but leaves projects the
+human imported. Design and limitations:
+`docs/20-connections.md`.
+
 ## 4. Trust boundaries and controls
 
 | Risk | Control |
@@ -131,7 +156,9 @@ IMAP poll → messages → verification codes / replies
 | XSS in dashboard | Jinja autoescape; no `|safe` on user data; CSP header |
 | SQL injection | Parameterized queries only |
 | Path traversal in uploads | `Path.name`, UUID filenames, output inside data dir |
-| Secret leakage | `.env` gitignored; `config.yml` holds no secrets; keyring optional |
+| Secret leakage | `.env` gitignored; `config.yml` holds no secrets; LLM/IMAP use env; GitHub token uses OS keychain, a 0600 fallback, or env |
+| GitHub token scope | Fixed `api.github.com` destination; no redirects; read-only endpoints; bounded responses; token never in URLs, HTML, DB, exports, or errors |
+| Untrusted README | Escaped display only; no LLM; no automatic resume insertion; explicit project form approval |
 | Browser credential theft | No password storage; user logs in manually; persistent profile dir is local and gitignored |
 | Unattended spam | Submit is human-only; `--allow-submit` is explicit and audited |
 | Captcha bypass | None; pause and hand off |
@@ -146,6 +173,7 @@ IMAP poll → messages → verification codes / replies
 - `jobforge tailor --job 42` — resume PDF.
 - `jobforge apply --job 42` — fill + review.
 - `jobforge email poll` — IMAP.
+- **Dashboard → Connections** — optional GitHub repository context and reviewed project import.
 - `jobforge audit` — parity + security checks.
 
 ## 6. Non-goals

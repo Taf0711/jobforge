@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}GitHub repositories · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Connections / GitHub</p>
+    <h1>Repositories</h1>
+    <p class="muted">@{{ connection.login }} · {{ repos|length }} shown · {{ imported_count }} already in the project bank. Open a repository to review its context before importing.</p>
+  </div>
+  <div class="actions">
+    <a class="button" href="/connections">Connections</a>
+    <form method="post" action="/connections/github/sync" class="inline"><button>Sync repositories</button></form>
+  </div>
+</section>
+
+<form method="get" action="/connections/github" class="filters">
+  <input type="search" name="q" value="{{ q }}" placeholder="Filter by repository, language, or topic" aria-label="Filter repositories">
+  <button>Filter</button>
+  {% if q %}<a class="button" href="/connections/github">Clear</a>{% endif %}
+</form>
+
+<section class="panel">
+  {% if repos %}
+    <table>
+      <thead><tr><th>Repository</th><th>Context</th><th>Updated</th><th></th></tr></thead>
+      <tbody>
+      {% for repo in repos %}
+        <tr>
+          <td>
+            <strong>{{ repo.full_name }}</strong>
+            {% if repo.imported %}<span class="pill">in resume</span>{% endif %}
+            {% if repo.private %}<span class="pill">private</span>{% endif %}
+            {% if repo.fork %}<span class="pill">fork</span>{% endif %}
+            {% if repo.archived %}<span class="pill bad">archived</span>{% endif %}
+            <div class="muted">{{ repo.description|short(160) or 'No description' }}</div>
+          </td>
+          <td>
+            {% if repo.language %}<span class="pill">{{ repo.language }}</span>{% endif %}
+            {% for topic in repo.topics[:4] %}<span class="chip">{{ topic }}</span>{% endfor %}
+            <div class="muted">{{ repo.stars }} stars</div>
+          </td>
+          <td class="muted">{{ repo.pushed_at[:10] if repo.pushed_at else '—' }}</td>
+          <td><a class="button" href="/connections/github/repos/{{ repo.repo_id }}">{{ 'Edit' if repo.imported else 'Review' }}</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="empty">No repositories matched. {% if q %}Clear the filter or {% endif %}sync again. If your repositories are private, make sure the token can read them.</p>
+  {% endif %}
+</section>
+{% endblock %}

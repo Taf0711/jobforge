@@ -141,8 +141,9 @@ def select_projects(
     multi-page resume. Score tags, tech lines, best-for labels, and bullets
     against the JD, then keep the top N.
     """
-    if len(profile.projects) <= max_projects:
-        return list(profile.projects)
+    live_projects = [project for project in profile.projects if not project.get("dead")]
+    if len(live_projects) <= max_projects:
+        return live_projects
 
     match: ArchetypeMatch | None = detect_archetype(jd, archetypes or {})
     priority: dict[str, int] = {}
@@ -156,7 +157,7 @@ def select_projects(
     jd_domains = _text_domains(" ".join([*jd.skills, *jd.must_skills]))
     title_domains = _text_domains(jd.title)
     scored: list[tuple[int, int, dict[str, Any]]] = []
-    for index, project in enumerate(profile.projects):
+    for index, project in enumerate(live_projects):
         text = " ".join(
             str(project.get(key, "") or "")
             for key in ("name", "title", "company", "description", "tech_line")
@@ -193,7 +194,7 @@ def select_projects(
 
     chosen = sorted(scored, key=lambda item: (-item[0], item[1]))[:max_projects]
     chosen_indices = {index for _, index, _ in chosen}
-    return [project for index, project in enumerate(profile.projects) if index in chosen_indices]
+    return [project for index, project in enumerate(live_projects) if index in chosen_indices]
 
 
 def ordered_skills(profile: Profile, jd: JD) -> list[str]:
@@ -229,6 +230,112 @@ def _format_certification(cert: dict[str, Any]) -> str:
     return name
 
 
+SKILL_GROUP_ORDER = ("Languages", "Technologies", "Concepts", "Developer Tools", "Additional")
+SKILL_GROUP_MEMBERS: dict[str, tuple[str, ...]] = {
+    "Languages": (
+        "Python", "Go", "TypeScript", "JavaScript", "Java", "C/C++", "SQL", "C#",
+        "HTML/CSS", "PHP", "Ruby", "Rust", "Kotlin", "Swift", "Scala", "R", "MATLAB",
+        "Perl", "Bash", "C", "C++",
+    ),
+    "Technologies": (
+        "Docker", "AWS", "FastAPI", "React", "Next.js", "Spring Boot", "Flask",
+        "PostgreSQL", "MongoDB", "SQLite", ".NET Core", "RxJS", "Oracle PeopleSoft",
+        "Drupal 10", "MySQL", "SQL Server", "Kubernetes", "Jenkins", "Streamlit",
+        "Redis", "OPA", "Prometheus", "Grafana", "Terraform", "Django", "Node.js",
+        "Express", "GraphQL", "Kafka", "RabbitMQ", "Airflow", "Snowflake", "Databricks",
+        "Spark", "Cloud Foundry", "Lambda", "S3", "EC2", "OAuth", "SSO", "JWT",
+        "Serverless", "DynamoDB", "AWS Lambda", "Entity Framework", "AngularJS",
+        "Google Cloud", "Gemini API", "OpenCV", "YOLOv11", "WebGPU", "OPA/Rego",
+        "NumPy", "scikit-learn",
+    ),
+    "Concepts": (
+        "LLM Orchestration", "LLM", "AI Infrastructure", "Security", "Distributed Systems",
+        "OOP", "DSA", "REST APIs", "CI/CD", "Cloud", "Data Analysis",
+        "Operating Systems", "Networking", "Machine Learning", "Deep Learning", "NLP",
+        "Computer Vision", "Reinforcement Learning", "System Design", "Testing",
+        "Agile/SDLC", "Microservices", "Observability", "High-Performance Computing",
+        "Concurrency", "Data Engineering", "ETL", "Accessibility", "Responsive Design",
+        "Algorithms", "Data Structures", "Computer Graphics", "Full-stack Development",
+        "Time-Series Forecasting", "Test Automation", "RBAC",
+        "Identity and Access Management", "Edge Computing", "Parallel Computing",
+        "Performance Engineering", "Data Structures & Algorithms", "RAG",
+        "AI/ML Infrastructure", "TCP/IP",
+    ),
+    "Developer Tools": (
+        "Git", "GitHub", "Linux", "Unix", "VIM", "Zed", "Claude Code", "Codex",
+        "Bruno", "Jira", "Confluence", "tcpdump", "pytest", "Jest", "Playwright",
+        "Selenium", "GitLab", "Figma",
+    ),
+}
+SKILL_GROUP_LIMITS = {
+    "Languages": 12, "Technologies": 19, "Concepts": 12, "Developer Tools": 10, "Additional": 4,
+}
+MONTHS = {
+    "01": "January", "02": "February", "03": "March", "04": "April", "05": "May",
+    "06": "June", "07": "July", "08": "August", "09": "September", "10": "October",
+    "11": "November", "12": "December",
+}
+
+
+def _display_date(value: Any) -> str:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{4})-(\d{2})", text)
+    if match:
+        return f"{MONTHS.get(match.group(2), match.group(2))} {match.group(1)}"
+    return text
+
+
+def _display_link(value: str) -> str:
+    return re.sub(r"^https?://(?:www\.)?", "", (value or "").strip()).rstrip("/")
+
+
+def _project_url(entry: dict[str, Any]) -> str:
+    for key in ("url", "link", "repo", "github", "source_url"):
+        value = str(entry.get(key) or "").strip()
+        if value:
+            return value if value.startswith(("http://", "https://")) else "https://" + value
+    haystack = " ".join(
+        str(entry.get(key) or "")
+        for key in ("notes", "description", "tech_line")
+    ) + " " + " ".join(str(item) for item in entry.get("bullets", []) or [])
+    match = re.search(r"(?:https?://)?github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", haystack)
+    return f"https://{match.group(0).removeprefix('https://').removeprefix('http://')}" if match else ""
+
+
+def _degree_line(entry: dict[str, Any]) -> str:
+    degree = str(entry.get("degree") or "").strip()
+    major = str(entry.get("major") or "").strip()
+    if degree and major:
+        return f"{degree} in {major}"
+    return degree or major
+
+
+def _skill_groups(profile: Profile, jd: JD) -> list[dict[str, Any]]:
+    owned = set(profile.skills or [])
+    if "C" in owned and "C++" in owned:
+        owned.discard("C")
+        owned.discard("C++")
+        owned.add("C/C++")
+    priority = set(jd.must_skills) | set(jd.skills)
+    known: set[str] = set()
+    grouped: list[dict[str, Any]] = []
+    for label in SKILL_GROUP_ORDER:
+        members = SKILL_GROUP_MEMBERS.get(label, ())
+        known.update(members)
+        items = [skill for skill in members if skill in owned]
+        # Keep the refined resume-forge order, but pull exact JD terms forward.
+        items = [skill for skill in items if skill in priority] + [
+            skill for skill in items if skill not in priority
+        ]
+        items = items[: SKILL_GROUP_LIMITS[label]]
+        if items:
+            grouped.append({"label": label, "items": items})
+    extras = sorted(owned - known)
+    if extras:
+        grouped.append({"label": "Additional", "items": extras[: SKILL_GROUP_LIMITS["Additional"]]})
+    return grouped
+
+
 def build_data(
     profile: Profile,
     jd: JD,
@@ -236,21 +343,27 @@ def build_data(
     summary: str = "",
     archetypes: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    contact = [
-        profile.email,
-        profile.phone,
-        profile.location,
-        profile.links.get("linkedin", ""),
-        profile.links.get("github", ""),
-        profile.links.get("portfolio", ""),
-    ]
     selected_by_entry: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for fact in selected:
         key = (str(fact.get("title", "")), str(fact.get("company", "")), str(fact.get("section", "")))
         selected_by_entry.setdefault(key, []).append(fact)
 
+    header: list[dict[str, str]] = []
+    if profile.phone:
+        header.append({"text": profile.phone, "url": ""})
+    if profile.email:
+        header.append({"text": profile.email, "url": f"mailto:{profile.email}"})
+    for key in ("linkedin", "github", "portfolio"):
+        value = str(profile.links.get(key) or "").strip()
+        if value:
+            header.append({"text": _display_link(value), "url": value})
+    if profile.work_auth.get("us_citizen"):
+        header.append({"text": "U.S. Citizen", "url": ""})
+
     experience = []
-    for entry in profile.experience:
+    # resume-forge keeps the base resume to three experience entries; later
+    # entries (for example a mentorship) stay in the profile but off the page.
+    for entry in profile.experience[:3]:
         key = (str(entry.get("title", "")), str(entry.get("company", "")), "experience")
         bullets = [f["text"] for f in selected_by_entry.get(key, [])]
         if not bullets:
@@ -260,8 +373,8 @@ def build_data(
                 "title": entry.get("title", ""),
                 "company": entry.get("company", ""),
                 "location": entry.get("location", ""),
-                "start": entry.get("start", ""),
-                "end": entry.get("end", ""),
+                "start": _display_date(entry.get("start")),
+                "end": _display_date(entry.get("end")),
                 "bullets": bullets,
             }
         )
@@ -269,13 +382,14 @@ def build_data(
     projects = []
     for entry in select_projects(profile, jd, archetypes=archetypes):
         key = (str(entry.get("title", "")), str(entry.get("company", "")), "projects")
-        bullets = [f["text"] for f in selected_by_entry.get(key, [])]
+        bullets = [f["text"] for f in selected_by_entry.get(key, [])][:3]
         if not bullets:
             bullets = list(entry.get("bullets", []))[:3]
         projects.append(
             {
                 "name": entry.get("title", "") or entry.get("name", ""),
-                "description": entry.get("description", "") or entry.get("company", ""),
+                "tech_line": entry.get("tech_line", "") or entry.get("description", "") or entry.get("company", ""),
+                "url": _project_url(entry),
                 "bullets": bullets,
             }
         )
@@ -285,8 +399,11 @@ def build_data(
             "institution": e.get("institution", ""),
             "degree": e.get("degree", ""),
             "major": e.get("major", ""),
-            "start": e.get("start", ""),
-            "end": e.get("end", ""),
+            "degree_line": _degree_line(e),
+            "location": e.get("location", "") or profile.location,
+            "start": _display_date(e.get("start")),
+            "end": _display_date(e.get("end") or e.get("graduation")),
+            "courses": list(e.get("courses") or e.get("relevant_courses") or [])[:8],
         }
         for e in profile.education
     ]
@@ -296,15 +413,18 @@ def build_data(
     ]
     certifications = [c for c in certifications if c]
 
+    skill_groups = _skill_groups(profile, jd)
     return {
         "name": profile.full_name or "Your Name",
-        "contact": [c for c in contact if c],
+        "header": header,
+        "contact": [item["text"] for item in header],
         "summary": summary or profile.summary,
         "experience": experience,
         "projects": projects,
         "education": education,
         "certifications": certifications,
-        "skills": ordered_skills(profile, jd)[:24],
+        "skills": [item for group in skill_groups for item in group["items"]],
+        "skill_groups": skill_groups,
     }
 
 
@@ -456,14 +576,13 @@ def tailor_resume(
         raise ValueError(f"Profile is missing required contact fields: {', '.join(missing)}")
     jd = parse_jd(job.description or job.title, title_hint=job.title, company_hint=job.company, location_hint=job.location)
     selected, fact_ids = select_facts(profile, jd, max_per_entry=4)
-    summary = summarize(profile, job, jd, llm)
-    data = build_data(profile, jd, selected, summary=summary, archetypes=archetypes)
+    data = build_data(profile, jd, selected, summary="", archetypes=archetypes)
     out_dir = Path(output_root) / slugify(job.company) / _output_dir_name(job)
-    template = COMPACT_TEMPLATE if len(profile.projects) > 3 else TEMPLATE
-    pdf_path, typ_path, data_path = render(data, out_dir, template=template)
+    pdf_path, typ_path, data_path = render(data, out_dir, template=TEMPLATE)
     ats = ats_check(pdf_path)
-    if ats.get("pages", 0) > 1 and template != COMPACT_TEMPLATE:
-        # Try the tighter layout before failing the one-page gate.
+    if ats.get("pages", 0) > 1:
+        # Keep the same resume-forge visual language, only tighten spacing/font
+        # enough to preserve the one-page requirement.
         pdf_path, typ_path, data_path = render(data, out_dir, template=COMPACT_TEMPLATE)
         ats = ats_check(pdf_path)
 
@@ -492,6 +611,6 @@ def tailor_resume(
         cover_letter_path=cover_path,
         ats=ats,
         selected_fact_ids=fact_ids,
-        summary=summary,
+        summary="",
         warnings=warnings,
     )

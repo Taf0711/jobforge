@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.4.2 — 2026-10-26
+
+### GitHub connections
+
+- Added `/connections` and `/connections/github`: optional read-only GitHub
+  connection, repository sync, README/language context, and a review form before
+  anything enters the resume.
+- GitHub tokens are stored in the OS keychain when available, with an atomic
+  `0600` local fallback, or supplied through `GITHUB_TOKEN` /
+  `JOBFORGE_GITHUB_TOKEN`. Tokens never appear in the database, templates,
+  exports, or error messages.
+- Syncing is capped at 300 owner repositories and three API pages; README
+  responses are capped at 64 KB. The client only talks to `api.github.com`, does
+  not follow redirects, and never calls a write endpoint.
+- README suggestions are extracted only from overview/features sections and
+  skip install/setup/usage sections. They prefill an editable project form; the
+  human submit is the truth boundary.
+- Confirmed imports add a `source: github` project, project facts, URL, tech
+  line, tags, and optionally detected canonical skills; jobs are rescored when
+  skills change. Disconnecting clears the token/cache but keeps imported
+  projects.
+- Added `connections` and `github_repos` tables, `docs/20-connections.md`,
+  `/connections` in offline e2e, and `tests/test_github_connection.py`.
+- Added `keyring` to runtime dependencies.
+
+### Resume tailoring
+
+- Tailored resumes now use the refined resume-forge visual language: 20pt
+  small-caps header, citizenship, Education → Experience → Projects → Technical
+  Skills, grouped skills, resume-forge margins/fonts, no summary/certifications.
+- The importer now carries project URLs, hides dead projects, merges education
+  dates/courses from the published PDF, and keeps the base three experience
+  entries on the page.
+- Project bullets are capped at three per project; a compact variant preserves
+  the same hierarchy when the full layout would exceed one page.
+
+### First-run setup wizard
+
+- Added a local, no-account `/setup` wizard: profile/resume → targets →
+  sources → readiness, with skip/back and editable settings afterward.
+- First empty launches redirect to setup; existing profiles/sources are not
+  interrupted, and incomplete installs get a non-blocking banner.
+- Added curated source presets (AI/developer tools, fintech/banking, product
+  infrastructure, public sector) plus custom board fields. The wizard writes
+  only `sources` and `scan` atomically into `config.yml`; preferences live in
+  SQLite.
+- Added preset detection, custom-board preservation, and readiness checks for
+  profile, targets, sources, Typst, and browser.
+- Added `/setup` tests for first-run redirect, profile upload, preferences,
+  source writes, custom boards, finish/skip, all four rendered steps, and
+  existing-install behavior.
+- Product patterns came from public Jobbie/Simplify/Welcome to the Jungle/Jobiz
+  onboarding pages; no Jobbie API, assets, copy, or authenticated data was used.
+  See `docs/19-onboarding.md`.
+
 ## v0.4.1 — 2026-10-26
 
 Security and integrity fixes from the tailoring/apply audit.

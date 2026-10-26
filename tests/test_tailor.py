@@ -71,7 +71,7 @@ def test_render_and_ats_check(tmp_path: Path):
 
 
 @pytest.mark.skipif(shutil.which("typst") is None, reason="typst not installed")
-def test_project_bank_uses_compact_template_and_stays_one_page(tmp_path: Path):
+def test_project_bank_uses_resume_forge_template_and_stays_one_page(tmp_path: Path):
     from jobforge.tailoring.tailor import tailor_resume
 
     profile = Profile(
@@ -141,7 +141,7 @@ def test_project_bank_uses_compact_template_and_stays_one_page(tmp_path: Path):
 
     result = tailor_resume(profile, job, tmp_path)
 
-    assert "0.12in" in Path(result.typ_path).read_text(encoding="utf-8")
+    assert "resume-forge visual language" in Path(result.typ_path).read_text(encoding="utf-8")
     assert result.ats["pages"] == 1
     assert result.cover_letter_path.endswith("cover_letter.pdf")
     assert Path(result.cover_letter_path).is_file()
