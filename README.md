@@ -8,7 +8,7 @@ Built as an independent clean-room replacement for the useful parts of paid auto
 
 | Loop | What happens |
 |---|---|
-| **Discover** | Pulls jobs from Greenhouse, Lever, Ashby, Workable, SmartRecruiters, and Workday public board APIs; accepts a pasted job URL |
+| **Discover** | Pulls jobs from Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Workday, USAJobs, and NYC Open Data public APIs; accepts a pasted job URL |
 | **Decide** | Scores each job as `weighted skill coverage × hard-gate survival`, with reasons, gaps, and a per-requirement table |
 | **Prepare** | Selects the most relevant verified bullets, reorders skills, optionally writes a grounded summary, renders a one-page Typst PDF, and checks the text layer |
 | **Apply** | Opens a persistent Chromium window, fills the form, uploads the resume, screenshots the result, and **stops**. You review and click Submit |
@@ -68,7 +68,7 @@ uv tool install --from git+ssh://git@github.com/Taf0711/jobforge.git jobforge
 For a reproducible release, pin the tag:
 
 ```bash
-uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.4.0" jobforge
+uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.4.1" jobforge
 ```
 
 `jobforge setup` writes config, data, output, and browser state under a per-user
@@ -117,7 +117,8 @@ jobforge app
    - Workable: `seedlegals`
    - SmartRecruiters: `Ubisoft`
 3. `scan` fetches and deduplicates jobs by fingerprint.
-4. `score` fills the match table.
+4. `score` fills the match table. The dashboard's **Run scan** scores newly
+   discovered jobs automatically; the CLI keeps `scan` and `score` separate.
 5. Open a job → **Tailor resume** → **Fill application**.
 
 ### Already using resume-forge?
@@ -162,6 +163,7 @@ jobforge export
 jobforge audit
 python -m jobforge.audit.adapter_eval --all --json   # deterministic ATS fixture eval
 python scripts/e2e_smoke.py --json                   # offline end-to-end smoke
+python scripts/smoke_live_ats.py --json              # live, non-submitting ATS smoke
 jobforge risk status                       # risky modes are off by default
 jobforge queue build --limit 10            # ranked supervised queue
 jobforge queue prepare
@@ -171,13 +173,17 @@ jobforge status
 
 `apply` opens a headed browser. Review the fields, solve any captcha yourself, and click Submit. Close the browser when done; the CLI records what was filled.
 
-The `python -m jobforge.audit.adapter_eval` and `python scripts/e2e_smoke.py` gates are developer-only and require a source checkout.
+The `adapter_eval`, `e2e_smoke`, and `smoke_live_ats` gates are developer-only and require a source checkout. The live smoke fills the public Lever demo form with synthetic data and **never clicks Submit**.
 
 Workday is supervised on purpose: if the page shows an account wall or password field and no application form, the adapter stops and hands the browser to you. It never creates an employer account or stores a password.
 
 ## Configuration
 
 `config.yml` (gitignored) controls paths, sources, seeded preferences, LLM, IMAP, and the browser.
+
+`scan.keywords` and `scan.exclude_keywords` gate job titles before insertion;
+`scan.max_new` caps new rows per scan (deferred rows are picked up by later
+scans). USAJobs is dormant until `USAJOBS_API_KEY` and `USAJOBS_EMAIL` are set.
 
 Secrets are **environment variables only**:
 
@@ -279,6 +285,7 @@ docs/
   13-risk-consent.md   explicit opt-in risk policy
   15-packaging.md      install, app home, release build
   16-resume-forge.md   import the personal verified profile/projects/tracker
+  18-source-presets.md  reference direct-ATS board/scan preset
 ```
 
 ## Tests
@@ -286,9 +293,11 @@ docs/
 ```bash
 make test        # pytest
 make audit       # parity + security
+make eval        # 6 fixture-driven ATS adapters
+make e2e         # offline FastAPI + Typst smoke
 ```
 
-The test suite covers DB CRUD/dedup/events, salary and HTML normalization, ATS detection, resume parsing, JD section parsing, skill extraction, partial credit, hard gates, title penalties, thin-JD caps, Typst render, ATS checks, web page rendering, SSRF rejection, the security scan, warm-path routing, the verification-code bridge, the answers editor, Workday parsing/account-wall/pagination, the supervised queue, the quality gate, risk consent and the unattended-submit cap, packaging paths, the launcher, and the fixture-driven adapter eval.
+The test suite covers DB CRUD/dedup/events, salary and HTML normalization, ATS detection, resume parsing, JD section parsing, skill extraction, partial credit, hard gates, title penalties, thin-JD caps, Typst render, blocking ATS checks, web page rendering, SSRF rejection, the security scan, warm-path routing, the verification-code bridge, the answers editor, Workday parsing/account-wall/pagination, the supervised queue, the quality gate, risk consent and the unattended-submit cap, re-tailor state preservation, grounded letters, upload targeting, auto-submit confirmation, packaging paths, the launcher, and the six-fixture adapter eval.
 
 Deterministic gates:
 
@@ -297,7 +306,12 @@ make test    # pytest
 make audit   # parity + static security
 make eval    # offline ATS fixture eval; JSON; non-zero on drift
 make e2e     # real FastAPI app + temp DB + Typst; JSON; non-zero on failure
+make smoke   # live Lever demo fill; network; no submit; manual release gate
 ```
+
+Dependencies are pinned in `requirements.lock` (regenerate with `make lock`).
+GitHub Actions runs `test`, `audit`, `eval`, and `e2e` on every push and pull
+request; the live smoke stays manual because it uses a public external form.
 
 ## Legal and platform notes
 

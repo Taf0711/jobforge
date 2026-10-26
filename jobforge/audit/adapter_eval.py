@@ -28,6 +28,14 @@ FIXTURE_TARGETS: dict[str, tuple[str, str]] = {
     "greenhouse": ("greenhouse", "https://boards.greenhouse.io/acme/jobs/123"),
     "ashby": ("ashby", "https://jobs.ashbyhq.com/acme/123/apply"),
     "workable": ("workable", "https://apply.workable.com/acme/j/ABC123/"),
+    "smartrecruiters": (
+        "smartrecruiters",
+        "https://jobs.smartrecruiters.com/Acme/12345",
+    ),
+    "workday": (
+        "workday",
+        "https://acme.wd1.myworkdayjobs.com/en-US/External/job/123",
+    ),
 }
 
 # Each fixture carries one voluntary disclosure. The exact wording differs so
@@ -37,6 +45,8 @@ DISCLOSURE_BY_ATS: dict[str, str] = {
     "greenhouse": "Veteran status",
     "ashby": "Gender",
     "workable": "Veteran status",
+    "smartrecruiters": "Gender",
+    "workday": "Veteran status",
 }
 
 SCREENING_QUESTION = "Why do you want to work here?"

@@ -33,12 +33,52 @@ class WorkdayAdapter(ATSAdapter):
         prefs: Preferences,
         resume_path: str,
         bank: AnswerBank,
+        cover_letter_path: str | None = None,
     ) -> FillReport:
+        _open_application(page)
         if _account_wall(page):
             report = FillReport(ats=self.name, url=page.url)
             report.notes.append(ACCOUNT_WALL_NOTE)
             return report
-        return super().fill(page, job, profile, prefs, resume_path, bank)
+        return super().fill(
+            page, job, profile, prefs, resume_path, bank, cover_letter_path=cover_letter_path
+        )
+
+
+def _open_application(page: Page) -> None:
+    """Workday job URLs land on the posting page, then a wizard chooser."""
+    try:
+        if page.locator('form, input[type="file"]').count() > 0:
+            return
+    except Exception:
+        return
+    apply_link = page.locator('[data-automation-id="adventureButton"]').first
+    try:
+        if apply_link.count():
+            href = apply_link.get_attribute("href")
+            if href:
+                page.goto(href, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(3000)
+            else:
+                apply_link.click()
+                page.wait_for_timeout(3000)
+    except Exception:
+        pass
+    # The apply wizard opens with "Autofill with Resume" / "Apply Manually".
+    for selector in (
+        'a:has-text("Apply Manually")',
+        'button:has-text("Apply Manually")',
+        'a:has-text("Autofill with Resume")',
+        'button:has-text("Autofill with Resume")',
+    ):
+        try:
+            locator = page.locator(selector).first
+            if locator.count() and locator.is_visible():
+                locator.click()
+                page.wait_for_timeout(4000)
+                return
+        except Exception:
+            continue
 
 
 def _visible_field_count(page: Page) -> int:

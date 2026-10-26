@@ -54,7 +54,7 @@ ALIASES: dict[str, str] = {
     "node": "Node.js",
     "nodejs": "Node.js",
     "node.js": "Node.js",
-    "next": "Next.js",
+    # Bare "next" matches "next generation"/"next steps"; require the product name.
     "nextjs": "Next.js",
     "react.js": "React",
     "reactjs": "React",

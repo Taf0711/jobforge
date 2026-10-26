@@ -58,8 +58,9 @@ class BrowserSession:
     def new_page(self) -> Page:
         if not self.context:
             raise RuntimeError("Browser session is not started")
-        page = self.context.pages[0] if self.context.pages else self.context.new_page()
-        return page
+        # Always use a fresh tab. The persistent profile may restore the user's
+        # previous tabs; navigating pages[0] would replace their work.
+        return self.context.new_page()
 
     def close(self) -> None:
         if self.context:

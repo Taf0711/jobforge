@@ -17,7 +17,10 @@ from bs4 import BeautifulSoup
 
 USER_AGENT = "JobForge/0.1 (+local job search; contact: local-user)"
 DEFAULT_TIMEOUT = 30
-MAX_BYTES = 5 * 1024 * 1024
+# Greenhouse boards with content=true commonly exceed 5 MB (Stripe ~5.6 MB,
+# Anthropic ~9.9 MB, Databricks ~9.8 MB). A 5 MB cap rejected those boards
+# outright; keep a sane memory bound without dropping the useful sources.
+MAX_BYTES = 32 * 1024 * 1024
 
 
 class SourceError(RuntimeError):

@@ -11,9 +11,11 @@ class WorkableAdapter(ATSAdapter):
     name = "workable"
     patterns = ("workable.com",)
 
-    def fill(self, page: Page, job: Job, profile: Profile, prefs: Preferences, resume_path: str, bank: AnswerBank) -> FillReport:
+    def fill(self, page: Page, job: Job, profile: Profile, prefs: Preferences, resume_path: str, bank: AnswerBank, cover_letter_path: str | None = None) -> FillReport:
         try:
             page.wait_for_selector("form, input[type='file']", timeout=12_000)
         except Exception:
             pass
-        return super().fill(page, job, profile, prefs, resume_path, bank)
+        return super().fill(
+            page, job, profile, prefs, resume_path, bank, cover_letter_path=cover_letter_path
+        )

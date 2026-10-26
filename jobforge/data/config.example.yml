@@ -19,6 +19,22 @@ sources:
     companies: []      # e.g. [Ubisoft]
   workday:
     boards: []         # e.g. ["acme|wd1|External"] or a myworkdayjobs.com board URL
+  nyc_opendata:
+    query: "software"
+    limit: 200
+    enabled: false     # keyless NYC public-sector postings
+  usajobs:
+    keyword: "software engineer"
+    limit: 50
+    enabled: false     # needs USAJOBS_API_KEY + USAJOBS_EMAIL
+
+# Scan-wide title gate and per-run budget. Empty keyword lists keep everything.
+# max_new limits inserted jobs per scan (0 = unlimited); later scans pick up
+# the deferred rows because already-seen fingerprints do not consume the cap.
+scan:
+  keywords: []            # e.g. [software engineer, backend, data engineer]
+  exclude_keywords: []    # e.g. [senior, staff, principal]
+  max_new: 250
 
 # Seed preferences on first run. Stored in SQLite afterwards.
 preferences:

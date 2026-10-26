@@ -80,7 +80,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # Chromium serializes a same-origin form POST's Origin as "null" when
+        # the document is served with Referrer-Policy: no-referrer, which the
+        # strict origin check above would reject. Same-origin still leaks no
+        # referrer off-host and keeps a real Origin on dashboard writes.
+        response.headers["Referrer-Policy"] = "same-origin"
         return response
 
     def context(request: Request, conn: sqlite3.Connection) -> dict[str, Any]:
@@ -179,8 +183,22 @@ def create_app(config: Config | None = None) -> FastAPI:
     def scan_run(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         stats = services.scan(cfg, conn)
         msg = f"Scan: {stats.get('new', 0)} new, {stats.get('seen', 0)} seen"
+        if stats.get("filtered"):
+            msg += f", {stats['filtered']} filtered"
+        if stats.get("deferred"):
+            msg += f", {stats['deferred']} deferred"
+        per_source = stats.get("per_source") or {}
+        if per_source:
+            msg += " [" + ", ".join(f"{k}:{v}" for k, v in sorted(per_source.items())) + "]"
         if stats.get("errors"):
             msg += f", {len(stats['errors'])} errors"
+        # A scan only inserts jobs. Score just the unscored ones so new rows
+        # clear the dashboard/queue min_score filter without a second click.
+        try:
+            result = services.rescore(cfg, conn, only_unscored=True)
+            msg += f", scored {result['scored']}"
+        except Exception as exc:
+            msg += f", score failed: {exc}"
         return RedirectResponse(f"/?msg={_msg(msg)}", status_code=303)
 
     @app.post("/score/run")

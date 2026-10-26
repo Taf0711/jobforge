@@ -17,6 +17,10 @@ CAPTCHA_TEXT = (
     "i am not a robot",
     "complete the captcha",
     "security check",
+    "just a moment",
+    "checking your browser",
+    "enable javascript and cookies",
+    "attention required",
 )
 
 
@@ -44,8 +48,8 @@ def submit_button(page: Page):
         'button[type="submit"]',
         'input[type="submit"]',
         'button:has-text("Submit application")',
+        'button:has-text("Send application")',
         'button:has-text("Submit")',
-        'button:has-text("Apply")',
     ]
     for selector in candidates:
         try:

@@ -40,12 +40,14 @@ def test_all_ats_fixtures_fill_and_hold(tmp_path):
         FIXTURE_DIR, demo_profile(), demo_preferences(), tmp_path
     )
 
-    assert len(results) == 4
+    assert len(results) == 6
     assert {result.ats for result in results} == {
         "lever",
         "greenhouse",
         "ashby",
         "workable",
+        "smartrecruiters",
+        "workday",
     }
     for result in results:
         assert result.ok, result.to_dict()
@@ -127,5 +129,5 @@ def test_cli_prints_one_json_document():
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(proc.stdout)
     assert payload["ok"] is True
-    assert len(payload["results"]) == 4
+    assert len(payload["results"]) == 6
     assert all(result["submitted"] is False for result in payload["results"])

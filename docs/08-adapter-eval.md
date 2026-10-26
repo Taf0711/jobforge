@@ -1,7 +1,7 @@
 # ATS Adapter Eval
 
-Offline, fixture-driven regression net for the generic form filler and the four
-existing ATS adapters: Lever, Greenhouse, Ashby, and Workable.
+Offline, fixture-driven regression net for the generic form filler and the six
+existing ATS adapters: Lever, Greenhouse, Ashby, Workable, SmartRecruiters, and Workday.
 
 The eval exists to catch selector drift. It renders a saved HTML form, runs the
 real adapter through the real `fill_form` path, and asserts typed outcomes. It
@@ -10,7 +10,7 @@ does not use an LLM or an agentic judge for pass/fail.
 ## Command
 
 ```bash
-# All four fixtures, one JSON document on stdout. Exit 0 iff every result is ok.
+# All six fixtures, one JSON document on stdout. Exit 0 iff every result is ok.
 .venv/bin/python -m jobforge.audit.adapter_eval --all --json
 
 # One fixture (adapter selected by fixture stem).
@@ -85,7 +85,7 @@ It then evaluates these checks:
 | Viewport | `1280x900` | Desktop layout; visible fields are stable |
 | Page load | `set_content(..., wait_until="domcontentloaded")` | Fixtures are local static HTML; no network wait |
 | Timeout | `timeout_ms=5000` default, applied to page default and `set_content` | Bounded failure instead of a hung gate |
-| Input | `tests/fixtures/ats/{lever,greenhouse,ashby,workable}.html` | One fixture per existing adapter |
+| Input | `tests/fixtures/ats/{lever,greenhouse,ashby,workable,smartrecruiters,workday}.html` | One fixture per existing adapter |
 | Profile | `demo_profile()`: Ada Lovelace, no disclosures, work-authorized | Fixed values, including the empty sensitive fields |
 | Preferences | `demo_preferences()` | No sponsorship; relocation allowed |
 | Answer bank | `AnswerBank(None)` | No overrides can mask a filler regression |
@@ -107,6 +107,8 @@ The fixtures intentionally use different discovery surfaces:
 | `greenhouse.html` | wrapping labels, `label[for]`, and `aria-label` | wrapping-label select |
 | `ashby.html` | generated `_systemfield_*` ids with `label[for]` | fieldset + radio group |
 | `workable.html` | placeholders and `aria-label` (no text inputs with names) | select with `aria-label` |
+| `smartrecruiters.html` | label[for] plus ids and names | select |
+| `workday.html` | label[for] plus ids and names | select |
 
 ## Fixture expectations
 
@@ -116,6 +118,8 @@ The fixtures intentionally use different discovery surfaces:
 | greenhouse | 8 fields including work auth `Yes` | screening question, `Veteran status` |
 | ashby | 8 fields including work auth `Yes` | screening question, `Gender` |
 | workable | 8 fields including work auth `Yes` | screening question, `Veteran status` |
+| smartrecruiters | 8 fields including work auth `Yes` | screening question, `Gender` |
+| workday | 8 fields including work auth `Yes` | screening question, `Veteran status` |
 
 Resume upload is expected on every fixture. `submitted` and `captcha` must be
 falsey on every fixture. `tests/test_adapter_eval.py::test_captcha_fixture_fails_the_gate`

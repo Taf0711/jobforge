@@ -4,7 +4,13 @@ from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 
 from jobforge.models import Job
-from jobforge.sources.base import _retry_after_seconds, html_to_text, is_remote, parse_salary
+from jobforge.sources.base import (
+    MAX_BYTES,
+    _retry_after_seconds,
+    html_to_text,
+    is_remote,
+    parse_salary,
+)
 from jobforge.sources.direct import detect_ats
 
 
@@ -34,6 +40,12 @@ def test_retry_after_accepts_http_date():
     assert 0 < delay <= 31
     assert _retry_after_seconds("3") == 3.0
     assert _retry_after_seconds("not-a-date") == 2.0
+
+
+def test_large_greenhouse_boards_fit_response_cap():
+    # Stripe/Anthropic/Databricks exceed 5 MB with content=true; the old cap
+    # silently dropped the largest and most useful boards.
+    assert MAX_BYTES >= 16 * 1024 * 1024
 
 
 def test_ats_detection():

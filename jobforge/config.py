@@ -102,6 +102,7 @@ class Config:
     browser: BrowserConfig
     server: ServerConfig
     config_path: Path | None = None
+    scan: dict[str, Any] = field(default_factory=dict)
 
     def ensure_dirs(self) -> None:
         for p in (self.data_dir, self.output_dir, self.data_dir / "uploads", self.data_dir / "screenshots"):
@@ -182,6 +183,7 @@ def load_config(path: str | Path | None = None) -> Config:
         browser=browser,
         server=server,
         config_path=config_path,
+        scan=dict(_get(data, "scan", {}) or {}),
     )
     cfg.ensure_dirs()
     return cfg

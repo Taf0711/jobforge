@@ -10,7 +10,9 @@ from .base import JobSource, SourceError
 from .direct import fetch_job_url
 from .greenhouse import GreenhouseSource
 from .lever import LeverSource
+from .nyc import NYCOpenDataSource
 from .smartrecruiters import SmartRecruitersSource
+from .usajobs import USAJobsSource
 from .workable import WorkableSource
 from .workday import WorkdaySource
 
@@ -21,7 +23,12 @@ SOURCES: dict[str, JobSource] = {
     "workable": WorkableSource(),
     "smartrecruiters": SmartRecruitersSource(),
     "workday": WorkdaySource(),
+    "nyc_opendata": NYCOpenDataSource(),
+    "usajobs": USAJobsSource(),
 }
+
+# Sources configured as one section object, not a list of board slugs.
+SINGLETON_SOURCES = {"nyc_opendata", "usajobs"}
 
 
 @dataclass
@@ -51,6 +58,17 @@ def fetch_configured(config: Config, only: list[str] | None = None) -> FetchRepo
     for name in names:
         if name not in SOURCES:
             report.errors.append(f"Unknown source: {name}")
+            continue
+        section = config.sources.get(name)
+        if name in SINGLETON_SOURCES:
+            if not isinstance(section, dict) or section.get("enabled", True) is False:
+                continue
+            try:
+                jobs = SOURCES[name].fetch("", **section)
+                report.jobs.extend(jobs)
+                report.per_source[name] = report.per_source.get(name, 0) + len(jobs)
+            except Exception as exc:  # one optional source must not abort the scan
+                report.errors.append(f"{name}: {exc}")
             continue
         for board in configured_boards(config, name):
             try:

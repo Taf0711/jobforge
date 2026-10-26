@@ -25,6 +25,11 @@ def test_extract_skills_avoids_clevel_false_positive():
     assert {"Python", "C++", "Go"} <= set(skills)
 
 
+def test_extract_skills_does_not_match_next_generation():
+    assert "Next.js" not in extract_skills("Design the next generation of APIs")
+    assert "Next.js" in extract_skills("Experience with Next.js and React")
+
+
 def test_partial_credit_from_adjacent_language():
     graph = SkillGraph()
     result = coverage(

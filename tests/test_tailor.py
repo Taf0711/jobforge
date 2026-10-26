@@ -143,3 +143,6 @@ def test_project_bank_uses_compact_template_and_stays_one_page(tmp_path: Path):
 
     assert "0.12in" in Path(result.typ_path).read_text(encoding="utf-8")
     assert result.ats["pages"] == 1
+    assert result.cover_letter_path.endswith("cover_letter.pdf")
+    assert Path(result.cover_letter_path).is_file()
+    assert Path(result.cover_letter_path).stat().st_size > 500

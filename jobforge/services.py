@@ -10,7 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import db, quality
 from .config import Config
 from .matching.resume import load_profile_file, merge_profiles, profile_from_resume
 from .matching.score import score_all
@@ -115,7 +115,14 @@ def scan(
     urls: list[str] | None = None,
 ) -> dict[str, Any]:
     run_id = db.start_run(conn, "scan")
-    stats: dict[str, Any] = {"new": 0, "seen": 0, "errors": [], "per_source": {}}
+    stats: dict[str, Any] = {
+        "new": 0,
+        "seen": 0,
+        "filtered": 0,
+        "deferred": 0,
+        "errors": [],
+        "per_source": {},
+    }
     try:
         jobs: list[Job] = []
         if urls:
@@ -129,8 +136,38 @@ def scan(
             jobs = report.jobs
             stats["errors"] = report.errors
             stats["per_source"] = report.per_source
+            scan_cfg = config.scan or {}
+            include = [
+                str(k).strip().lower()
+                for k in (scan_cfg.get("keywords") or [])
+                if str(k).strip()
+            ]
+            exclude = [
+                str(k).strip().lower()
+                for k in (scan_cfg.get("exclude_keywords") or [])
+                if str(k).strip()
+            ]
+            if include or exclude:
+                before_filter = len(jobs)
+                jobs = [
+                    job
+                    for job in jobs
+                    if (not include or any(k in (job.title or "").lower() for k in include))
+                    and not any(k in (job.title or "").lower() for k in exclude)
+                ]
+                stats["filtered"] = before_filter - len(jobs)
+            # Freshest first; the cap keeps the first web scan from turning
+            # into a multi-minute deep-score request.
+            jobs.sort(
+                key=lambda job: ((job.posted_at or ""), (job.title or "").lower()),
+                reverse=True,
+            )
+        max_new = 0 if urls else int((config.scan or {}).get("max_new") or 0)
         for job in jobs:
             before = conn.execute("SELECT id FROM jobs WHERE fingerprint=?", (job.fingerprint,)).fetchone()
+            if before is None and max_new > 0 and stats["new"] >= max_new:
+                stats["deferred"] += 1
+                continue
             db.upsert_job(conn, job)
             stats["new" if before is None else "seen"] += 1
         status = RunStatus.OK
@@ -141,11 +178,13 @@ def scan(
     return stats
 
 
-def rescore(config: Config, conn: sqlite3.Connection) -> dict[str, Any]:
+def rescore(
+    config: Config, conn: sqlite3.Connection, *, only_unscored: bool = False
+) -> dict[str, Any]:
     profile, prefs = ensure_profile(config, conn)
     run_id = db.start_run(conn, "score")
     try:
-        result = score_all(conn, profile, prefs)
+        result = score_all(conn, profile, prefs, only_unscored=only_unscored)
         db.finish_run(conn, run_id, RunStatus.OK.value, result)
         return result
     except Exception as exc:
@@ -168,18 +207,47 @@ def tailor_job(config: Config, conn: sqlite3.Connection, job_id: int) -> dict[st
         result = tailor_resume(
             profile, job, config.output_dir, llm=llm, archetypes=load_archetypes(config)
         )
-        app = Application(
-            job_id=job.id,
-            profile_id=profile.id,
-            status=ApplicationStatus.DRAFT.value,
-            ats=job.source,
-            resume_path=result.pdf_path,
-            cover_letter_path=result.cover_letter_path,
-            answers={},
-            notes="Tailored resume generated",
-        )
-        app_id = db.create_application(conn, app)
-        db.log_event(conn, app_id, "tailored", result.pdf_path)
+        if not result.ats.get("ok"):
+            errors = "; ".join(result.ats.get("errors") or ["unknown ATS failure"])
+            raise ValueError(f"Tailored PDF failed ATS checks: {errors}")
+
+        existing = conn.execute(
+            "SELECT * FROM applications WHERE job_id=? AND profile_id=?",
+            (job.id, profile.id),
+        ).fetchone()
+        if existing and str(existing["status"]) in {
+            ApplicationStatus.SUBMITTED.value,
+            ApplicationStatus.INTERVIEW.value,
+            ApplicationStatus.OFFER.value,
+        }:
+            raise ValueError(
+                f"Application is already {existing['status']}; refusing to replace the "
+                "resume that was sent. Tailor a new application only after reopening it."
+            )
+        if existing:
+            app_id = int(existing["id"])
+            db.update_application(
+                conn,
+                app_id,
+                ats=job.source,
+                resume_path=result.pdf_path,
+                cover_letter_path=result.cover_letter_path,
+                notes="Tailored resume regenerated",
+            )
+            db.log_event(conn, app_id, "tailored", result.pdf_path)
+        else:
+            app = Application(
+                job_id=job.id,
+                profile_id=profile.id,
+                status=ApplicationStatus.DRAFT.value,
+                ats=job.source,
+                resume_path=result.pdf_path,
+                cover_letter_path=result.cover_letter_path,
+                answers={},
+                notes="Tailored resume generated",
+            )
+            app_id = db.create_application(conn, app)
+            db.log_event(conn, app_id, "tailored", result.pdf_path)
         stats = {
             "application_id": app_id,
             "pdf": result.pdf_path,
@@ -187,6 +255,7 @@ def tailor_job(config: Config, conn: sqlite3.Connection, job_id: int) -> dict[st
             "ats": result.ats,
             "facts": len(result.selected_fact_ids),
             "warnings": result.warnings,
+            "reused_application": bool(existing),
         }
         db.finish_run(conn, run_id, RunStatus.OK.value, stats)
         return stats
@@ -224,6 +293,12 @@ def apply_job(
             "Indeed and LinkedIn are manual-only in JobForge. Open the posting and apply yourself."
         )
 
+    # Defense in depth: CLI, web, and queue already gate, but the service is a
+    # public entry point and must not open a browser for a blocked job.
+    gate = quality.evaluate(conn, job, profile, prefs, require_prepared=False)
+    if not gate.ready:
+        raise quality.QualityBlocked(gate)
+
     auto_submit = bool(allow_submit or config.browser.allow_submit)
     if auto_submit:
         from .risk import reserve_submission
@@ -236,14 +311,17 @@ def apply_job(
 
     run_id = db.start_run(conn, "apply")
     try:
+        cover_letter = str(existing["cover_letter_path"] or "") if existing else ""
         report = run_application(
             job,
             profile,
             prefs,
             config.browser,
             resume,
+            cover_letter_path=cover_letter or None,
             answer_bank_path=config.data_dir / "answers.json",
             allow_submit=auto_submit,
+            submission_authorized=auto_submit,
             hold_seconds=hold_seconds,
             screenshot_dir=config.data_dir / "screenshots",
         )
@@ -257,6 +335,7 @@ def apply_job(
             status=status,
             ats=report.ats,
             resume_path=resume,
+            cover_letter_path=cover_letter,
             answers=answers,
             screenshot_path=report.screenshot,
             error_code="captcha" if report.captcha else "",

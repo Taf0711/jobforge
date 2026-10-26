@@ -64,12 +64,19 @@ jobforge/
 ### 3.1 Discover
 
 ```
-config.yml (boards)
+config.yml (boards / singleton sources)
    → sources.<ats>.fetch(board)
+   → optional title gate + per-scan new-row cap
    → normalize to Job
    → fingerprint = sha256(company|title|location|url)
    → upsert jobs
 ```
+
+Direct ATS sources (Greenhouse, Lever, Ashby, Workable, SmartRecruiters,
+Workday) are board-based. USAJobs and NYC Open Data are singleton public-sector
+sources configured as one section object, not a board list. Discovery is not
+verification: aggregator/HN leads are not inserted because they lack a canonical
+employer application URL for the quality gate.
 
 ### 3.2 Score
 

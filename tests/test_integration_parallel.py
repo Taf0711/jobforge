@@ -9,6 +9,7 @@ from jobforge import db, services
 from jobforge.cli import build_parser
 from jobforge.config import BrowserConfig, Config, EmailConfig, LLMConfig, ServerConfig
 from jobforge.models import Job, MatchResult, Profile
+from jobforge.sources.registry import FetchReport
 from jobforge.web.app import create_app
 
 
@@ -197,6 +198,152 @@ def test_origin_must_match_exactly(tmp_path: Path):
         follow_redirects=False,
     )
     assert missing_host.status_code == 403
+
+
+def test_scan_filters_titles_and_caps_new_jobs(tmp_path: Path, monkeypatch):
+    cfg = _config(tmp_path)
+    cfg.scan = {
+        "keywords": ["software engineer"],
+        "exclude_keywords": ["senior"],
+        "max_new": 1,
+    }
+    _seed(cfg)
+    report = FetchReport(
+        jobs=[
+            Job(
+                source="lever",
+                source_id="1",
+                company="Acme",
+                title="Software Engineer",
+                location="Remote",
+            ),
+            Job(
+                source="lever",
+                source_id="new-1",
+                company="NewCo",
+                title="Software Engineer II",
+                location="Remote",
+                posted_at="2026-10-25T00:00:00+00:00",
+            ),
+            Job(
+                source="lever",
+                source_id="new-2",
+                company="OldCo",
+                title="Software Engineer I",
+                location="Remote",
+                posted_at="2026-10-01T00:00:00+00:00",
+            ),
+            Job(
+                source="lever",
+                source_id="senior",
+                company="SeniorCo",
+                title="Senior Software Engineer",
+                location="Remote",
+            ),
+            Job(
+                source="lever",
+                source_id="pm",
+                company="PMCo",
+                title="Product Manager",
+                location="Remote",
+            ),
+        ],
+        per_source={"lever": 5},
+    )
+    monkeypatch.setattr(services, "fetch_configured", lambda config, only=None: report)
+    conn = db.connect(cfg.db_path)
+
+    stats = services.scan(cfg, conn)
+
+    assert stats["filtered"] == 2
+    assert stats["new"] == 1
+    assert stats["seen"] == 1
+    assert stats["deferred"] == 1
+    assert conn.execute("SELECT 1 FROM jobs WHERE source_id='new-1'").fetchone()
+    assert not conn.execute("SELECT 1 FROM jobs WHERE source_id='new-2'").fetchone()
+    assert not conn.execute("SELECT 1 FROM jobs WHERE source_id='senior'").fetchone()
+    conn.close()
+
+
+def test_scan_route_scores_only_unscored_jobs(tmp_path: Path, monkeypatch):
+    cfg = _config(tmp_path)
+    _seed(cfg)
+    calls: list[bool] = []
+
+    monkeypatch.setattr(
+        services,
+        "scan",
+        lambda config, conn: {
+            "new": 1,
+            "seen": 0,
+            "errors": [],
+            "per_source": {"lever": 1},
+        },
+    )
+
+    def fake_rescore(config, conn, *, only_unscored: bool = False):
+        calls.append(only_unscored)
+        return {"scored": 1, "total": 1}
+
+    monkeypatch.setattr(services, "rescore", fake_rescore)
+    client = TestClient(create_app(cfg))
+    response = client.post(
+        "/scan/run",
+        headers={"Origin": "http://testserver", "Host": "testserver"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert calls == [True]
+    from urllib.parse import unquote
+
+    assert "scored 1" in unquote(response.headers["location"])
+
+
+def test_score_all_can_score_only_unscored_jobs(tmp_path: Path):
+    cfg = _config(tmp_path)
+    _seed(cfg)
+    conn = db.connect(cfg.db_path)
+    db.upsert_job(
+        conn,
+        Job(
+            source="lever",
+            source_id="unscored",
+            company="NewCo",
+            title="New Role",
+            location="Remote",
+            description="Requirements:\n- Python",
+        ),
+    )
+    profile, prefs = services.ensure_profile(cfg, conn)
+    from jobforge.matching.score import score_all
+
+    result = score_all(conn, profile, prefs, only_unscored=True)
+
+    assert result["total"] == 1
+    assert result["scored"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 2
+    conn.close()
+
+
+def test_dashboard_posts_keep_a_usable_origin_header(tmp_path: Path):
+    """Chromium sends Origin: null for form POSTs under no-referrer."""
+    cfg = _config(tmp_path)
+    _seed(cfg)
+    client = TestClient(create_app(cfg))
+
+    home = client.get("/")
+    assert home.status_code == 200
+    assert home.headers["referrer-policy"] == "same-origin"
+
+    # The fix must not be "accept null origins": that would reopen CSRF.
+    null_origin = client.post(
+        "/answers",
+        data={"key": "notice period", "value": "2 weeks"},
+        headers={"Origin": "null", "Host": "testserver"},
+        follow_redirects=False,
+    )
+    assert null_origin.status_code == 403
 
 
 def test_access_token_protects_reads_and_writes(tmp_path: Path):

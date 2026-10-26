@@ -45,6 +45,7 @@ class FillReport:
     captcha: str = ""
     screenshot: str = ""
     resume_uploaded: bool = False
+    cover_letter_uploaded: bool = False
     submitted: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -57,6 +58,7 @@ class FillReport:
             "captcha": self.captcha,
             "screenshot": self.screenshot,
             "resume_uploaded": self.resume_uploaded,
+            "cover_letter_uploaded": self.cover_letter_uploaded,
             "submitted": self.submitted,
             "notes": self.notes,
         }
@@ -126,20 +128,48 @@ def _fill_select(locator: Locator, value: str) -> bool:
     return False
 
 
-def upload_resume(page: Page, resume_path: str) -> bool:
-    if not resume_path or not Path(resume_path).exists():
+def _file_meta(page: Page, inp: Locator) -> str:
+    return " ".join(
+        filter(
+            None,
+            [
+                _label_for(page, inp),
+                inp.get_attribute("name") or "",
+                inp.get_attribute("id") or "",
+                inp.get_attribute("accept") or "",
+            ],
+        )
+    ).lower()
+
+
+def _upload_to_matching(page: Page, path: str, include: tuple[str, ...]) -> bool:
+    if not path or not Path(path).exists():
         return False
     try:
         inputs = page.locator('input[type="file"]').all()
     except Exception:
         return False
-    for inp in inputs:
+    preferred = [inp for inp in inputs if any(token in _file_meta(page, inp) for token in include)]
+    # Never guess between multiple unnamed upload slots; only fall back when
+    # there is exactly one file input on the page.
+    candidates = preferred or (inputs if len(inputs) == 1 else [])
+    for inp in candidates:
         try:
-            inp.set_input_files(resume_path)
+            inp.set_input_files(path)
             return True
         except Exception:
             continue
     return False
+
+
+def upload_resume(page: Page, resume_path: str) -> bool:
+    return _upload_to_matching(page, resume_path, ("resume", "cv", "curriculum"))
+
+
+def upload_cover_letter(page: Page, cover_letter_path: str) -> bool:
+    return _upload_to_matching(
+        page, cover_letter_path, ("cover letter", "cover_letter", "coverletter")
+    )
 
 
 def _option_selected(locator: Locator, value: str) -> bool:
@@ -219,6 +249,35 @@ def _fill_radio_groups(
             report.unresolved.append(f"{question[:180]} (answer: {answer.value})")
 
 
+def _report_required_controls(page: Page, report: FillReport) -> None:
+    try:
+        required = page.locator(
+            'input[required], textarea[required], select[required]'
+        ).all()
+    except Exception:
+        return
+    for control in required:
+        if not _visible(control):
+            continue
+        try:
+            tag = control.evaluate("el => el.tagName.toLowerCase()")
+            input_type = (control.get_attribute("type") or "text").lower()
+            value = control.input_value() if tag != "select" else control.input_value()
+        except Exception:
+            continue
+        label = _label_for(page, control) or "required field"
+        if tag == "input" and input_type in {"checkbox", "radio"}:
+            try:
+                if not control.is_checked():
+                    report.unresolved.append(
+                        f"{label[:180]} (required checkbox; human must confirm)"
+                    )
+            except Exception:
+                continue
+        elif not str(value or "").strip():
+            report.unresolved.append(f"{label[:180]} (required field left empty)")
+
+
 def fill_form(
     page: Page,
     job: Job,
@@ -227,47 +286,75 @@ def fill_form(
     resume_path: str,
     bank: AnswerBank,
     ats: str = "generic",
+    cover_letter_path: str | None = None,
 ) -> FillReport:
     report = FillReport(ats=ats, url=page.url)
     report.resume_uploaded = upload_resume(page, resume_path)
     if resume_path and not report.resume_uploaded:
-        report.notes.append("No file input found for the resume; upload it manually")
+        report.notes.append("No matching resume upload input found; attach it manually")
+    if cover_letter_path:
+        report.cover_letter_uploaded = upload_cover_letter(page, cover_letter_path)
+        if not report.cover_letter_uploaded:
+            report.notes.append("No matching cover-letter upload input found; attach it manually")
 
-    try:
-        controls = page.locator("input, textarea, select").all()
-    except Exception:
-        controls = []
-
-    for control in controls[:160]:
-        if not _visible(control):
-            continue
+    filled_labels: set[str] = set()
+    # Two passes catch fields revealed by answers on the first pass (e.g. "Yes"
+    # exposes a follow-up field).
+    for _ in range(2):
         try:
-            tag = control.evaluate("el => el.tagName.toLowerCase()")
-            input_type = (control.get_attribute("type") or "text").lower()
+            controls = page.locator("input, textarea, select").all()
         except Exception:
-            continue
-        if tag == "input" and input_type in SKIP_INPUT_TYPES | {"radio", "checkbox"}:
-            continue
-        name = (control.get_attribute("name") or "").lower()
-        if any(part in name for part in SKIP_NAME_PARTS):
-            continue
-        label = _label_for(page, control)
-        if not label or len(label) > 300:
-            continue
-        answer = bank.answer(label, profile, prefs)
-        if not answer.value:
-            report.unresolved.append(label[:200])
-            continue
-        if tag == "select":
-            ok = _fill_select(control, answer.value)
-        else:
-            ok = _fill_text(control, answer.value)
-        if ok:
-            report.fields.append(FieldReport(label[:200], answer.value, answer.category, "filled"))
-        else:
-            report.unresolved.append(f"{label[:180]} (answer: {answer.value})")
+            controls = []
+        if len(controls) > 400:
+            report.notes.append(
+                f"Form has {len(controls)} controls; reviewing the first 400 for safety"
+            )
+        for control in controls[:400]:
+            if not _visible(control):
+                continue
+            try:
+                tag = control.evaluate("el => el.tagName.toLowerCase()")
+                input_type = (control.get_attribute("type") or "text").lower()
+            except Exception:
+                continue
+            if tag == "input" and input_type in SKIP_INPUT_TYPES | {"radio", "checkbox"}:
+                continue
+            name = (control.get_attribute("name") or "").lower()
+            if any(part in name for part in SKIP_NAME_PARTS):
+                continue
+            label = _label_for(page, control)
+            if not label or len(label) > 300 or label in filled_labels:
+                continue
+            answer = bank.answer(label, profile, prefs)
+            if not answer.value:
+                report.unresolved.append(label[:200])
+                continue
+            if tag == "select":
+                ok = _fill_select(control, answer.value)
+            else:
+                ok = _fill_text(control, answer.value)
+            if ok:
+                filled_labels.add(label)
+                report.fields.append(
+                    FieldReport(label[:200], answer.value, answer.category, "filled")
+                )
+            else:
+                report.unresolved.append(f"{label[:180]} (answer: {answer.value})")
+        _fill_radio_groups(page, profile, prefs, bank, report)
+        if len(filled_labels) == 0:
+            break
 
-    _fill_radio_groups(page, profile, prefs, bank, report)
+    _report_required_controls(page, report)
+    report.unresolved = list(dict.fromkeys(report.unresolved))
+    seen_fields: set[tuple[str, str]] = set()
+    unique_fields: list[FieldReport] = []
+    for field in report.fields:
+        key = (field.label, field.value)
+        if key in seen_fields:
+            continue
+        seen_fields.add(key)
+        unique_fields.append(field)
+    report.fields = unique_fields
     return report
 
 
@@ -286,21 +373,70 @@ class ATSAdapter:
         prefs: Preferences,
         resume_path: str,
         bank: AnswerBank,
+        cover_letter_path: str | None = None,
     ) -> FillReport:
-        return fill_form(page, job, profile, prefs, resume_path, bank, ats=self.name)
+        return fill_form(
+            page,
+            job,
+            profile,
+            prefs,
+            resume_path,
+            bank,
+            ats=self.name,
+            cover_letter_path=cover_letter_path,
+        )
 
 
 def get_adapter(url: str) -> ATSAdapter:
     from .ashby import AshbyAdapter
     from .greenhouse import GreenhouseAdapter
     from .lever import LeverAdapter
+    from .smartrecruiters import SmartRecruitersAdapter
     from .workable import WorkableAdapter
     from .workday import WorkdayAdapter
 
-    for adapter in (LeverAdapter(), GreenhouseAdapter(), AshbyAdapter(), WorkableAdapter(), WorkdayAdapter()):
+    for adapter in (
+        LeverAdapter(),
+        GreenhouseAdapter(),
+        AshbyAdapter(),
+        WorkableAdapter(),
+        SmartRecruitersAdapter(),
+        WorkdayAdapter(),
+    ):
         if adapter.matches(url):
             return adapter
     return ATSAdapter()
+
+
+SUCCESS_PHRASES = (
+    "thank you for applying",
+    "application submitted",
+    "application received",
+    "we received your application",
+    "we have received your application",
+    "submission complete",
+    "successfully submitted",
+)
+
+
+def _submission_confirmed(page: Page, before_url: str) -> bool:
+    """Conservative post-click check; absence of confirmation is not success."""
+    try:
+        body = page.inner_text("body").lower()
+    except Exception:
+        body = ""
+    if any(phrase in body for phrase in SUCCESS_PHRASES):
+        return True
+    try:
+        after_url = (page.url or "").lower()
+    except Exception:
+        after_url = ""
+    if after_url and after_url != (before_url or "").lower():
+        return any(
+            token in after_url
+            for token in ("thank", "confirm", "submitted", "success", "complete")
+        )
+    return False
 
 
 def run_application(
@@ -310,11 +446,17 @@ def run_application(
     config: BrowserConfig,
     resume_path: str,
     *,
+    cover_letter_path: str | None = None,
     answer_bank_path: str | Path | None = None,
     allow_submit: bool = False,
+    submission_authorized: bool = False,
     hold_seconds: int = 0,
     screenshot_dir: str | Path | None = None,
 ) -> FillReport:
+    if allow_submit and not submission_authorized:
+        raise ValueError(
+            "Unattended submit must go through services.apply_job and the persisted risk policy"
+        )
     url = job.apply_url or job.url
     if not url:
         raise ValueError("Job has no apply URL")
@@ -330,7 +472,9 @@ def run_application(
         page = session.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=config.timeout_ms)
         page.wait_for_timeout(2500)
-        report = adapter.fill(page, job, profile, prefs, resume_path, bank)
+        report = adapter.fill(
+            page, job, profile, prefs, resume_path, bank, cover_letter_path=cover_letter_path
+        )
         report.captcha = captcha_present(page)
 
         out_dir = Path(screenshot_dir) if screenshot_dir else Path("data/screenshots")
@@ -343,16 +487,34 @@ def run_application(
         except Exception:
             report.notes.append("Screenshot failed")
 
-        if allow_submit and not report.captcha:
+        can_submit = allow_submit and not report.captcha
+        if allow_submit and not report.resume_uploaded:
+            report.notes.append("Auto-submit blocked: resume was not uploaded")
+            can_submit = False
+        if allow_submit and not any(field.category == "email" for field in report.fields):
+            report.notes.append("Auto-submit blocked: email field was not filled")
+            can_submit = False
+        if can_submit:
             button = submit_button(page)
             if button:
                 try:
+                    before_url = page.url
                     button.click()
                     page.wait_for_timeout(3500)
-                    report.submitted = True
-                    final = out_dir / f"{job.id or 'job'}-{stamp}-submitted.png"
-                    page.screenshot(path=str(final), full_page=True)
-                    report.screenshot = str(final)
+                    report.captcha = captcha_present(page) or report.captcha
+                    if report.captcha:
+                        report.notes.append(
+                            "Captcha appeared after submit; submission not confirmed"
+                        )
+                    elif _submission_confirmed(page, before_url):
+                        report.submitted = True
+                        final = out_dir / f"{job.id or 'job'}-{stamp}-submitted.png"
+                        page.screenshot(path=str(final), full_page=True)
+                        report.screenshot = str(final)
+                    else:
+                        report.notes.append(
+                            "Submit clicked but no confirmation detected; verify manually"
+                        )
                 except Exception as exc:
                     report.notes.append(f"Submit click failed: {exc}")
             else:
@@ -360,7 +522,7 @@ def run_application(
 
         if hold_seconds > 0:
             page.wait_for_timeout(hold_seconds * 1000)
-        elif not allow_submit:
+        elif not report.submitted:
             try:
                 input("\nReview the browser. Press Enter to close it (submit is manual)...")
             except EOFError:

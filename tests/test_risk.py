@@ -50,6 +50,16 @@ def _seed(cfg: Config, tmp_path: Path) -> tuple[int, int]:
         description="Requirements:\n- Python",
     )
     job_id = db.upsert_job(conn, job)
+    db.set_match(
+        conn,
+        MatchResult(
+            job_id=job_id,
+            profile_id=profile_id,
+            score=100,
+            coverage=1.0,
+            gate_survival=1.0,
+        ),
+    )
     conn.close()
     return profile_id, job_id
 
@@ -168,6 +178,10 @@ def test_apply_job_reserves_before_browser_and_caps(tmp_path: Path, monkeypatch)
 
     monkeypatch.setattr("jobforge.automation.base.run_application", fake_run_application)
     services.apply_job(cfg, conn, job_id, allow_submit=True)
+    # The first call records a submitted application; the second must reach the
+    # risk cap rather than stopping at the duplicate-status gate.
+    conn.execute("UPDATE applications SET status='withdrawn' WHERE job_id=?", (job_id,))
+    conn.commit()
 
     with pytest.raises(risk.RiskError):
         services.apply_job(cfg, conn, job_id, allow_submit=True)

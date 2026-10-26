@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
 import subprocess
+
+import pymupdf
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -305,8 +308,21 @@ def build_data(
     }
 
 
-def _supported(sentence: str, facts: list[str]) -> bool:
-    """Reject numbers not present in the fact bank. Proper nouns are too noisy to police perfectly."""
+def _profile_skills(profile: Profile) -> set[str]:
+    skills = set(profile.skills or [])
+    for fact in profile.facts:
+        skills.update(str(skill) for skill in (fact.get("skills") or []))
+    return skills
+
+
+def _supported(
+    sentence: str, facts: list[str], allowed_skills: set[str] | None = None
+) -> bool:
+    """Reject unsupported numbers and skills.
+
+    Proper-noun and employer claims still need human review; this is a
+    conservative floor, not a complete semantic proof.
+    """
     if not sentence.strip():
         return False
     known_numbers = set()
@@ -314,6 +330,10 @@ def _supported(sentence: str, facts: list[str]) -> bool:
         known_numbers.update(NUMBER.findall(fact))
     for number in NUMBER.findall(sentence):
         if number not in known_numbers:
+            return False
+    if allowed_skills is not None:
+        mentioned = set(extract_skills(sentence))
+        if mentioned - set(allowed_skills):
             return False
     return True
 
@@ -334,7 +354,11 @@ def summarize(profile: Profile, job: Job, jd: JD, llm: LLMClient | None) -> str:
     if not out:
         return base
     out = out.strip().strip('"')
-    if not _supported(out, [str(f.get("text", "")) for f in profile.facts]):
+    if not _supported(
+        out,
+        [str(f.get("text", "")) for f in profile.facts],
+        allowed_skills=_profile_skills(profile),
+    ):
         return base
     return out
 
@@ -349,14 +373,32 @@ def cover_letter(profile: Profile, job: Job, jd: JD, llm: LLMClient | None) -> s
             "Write the cover letter now."
         )
         out = llm.chat(COVER_LETTER_SYSTEM, prompt, temperature=0.25)
-        if out and _supported(out, [str(f.get("text", "")) for f in profile.facts] + [profile.full_name]):
+        if out and _supported(
+            out,
+            [str(f.get("text", "")) for f in profile.facts] + [profile.full_name],
+            allowed_skills=_profile_skills(profile),
+        ):
             return out.strip()
-    # Deterministic fallback: no invented claims.
-    skills = ", ".join(jd.must_skills[:5]) or "the role"
+    # Deterministic fallback: only claim skills the profile actually owns.
+    owned = [skill for skill in jd.must_skills if skill in set(profile.skills)]
+    if owned:
+        background = (
+            f"My background includes {', '.join(owned[:5])}, and my resume details "
+            "the work I have done with them."
+        )
+    elif profile.skills:
+        background = (
+            f"My background includes {', '.join(profile.skills[:4])}, and my resume "
+            "details the work I have done."
+        )
+    else:
+        background = "My resume details the work I have done."
+    focus = ""
+    if not owned and jd.must_skills:
+        focus = f" I am interested in the role's focus on {', '.join(jd.must_skills[:3])}."
     return (
         f"Dear Hiring Team,\n\n"
-        f"I am applying for the {job.title} role at {job.company}. My background includes "
-        f"{skills}, and my resume details the work I have done with them.\n\n"
+        f"I am applying for the {job.title} role at {job.company}. {background}{focus}\n\n"
         f"I would welcome the chance to discuss how my experience maps to your needs.\n\n"
         f"Sincerely,\n{profile.full_name}"
     )
@@ -380,6 +422,18 @@ def render(data: dict[str, Any], out_dir: Path, template: Path = TEMPLATE) -> tu
     return pdf_path, typ_path, data_path
 
 
+def _output_dir_name(job: Job) -> str:
+    """Stable, collision-free directory; the job id disambiguates same titles."""
+    base = slugify(job.title, 60)
+    location = slugify(job.location, 24) if (job.location or "").strip() else ""
+    if job.id is not None:
+        ident = str(job.id)
+    else:
+        basis = job.apply_url or job.url or job.source_id or base
+        ident = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:8]
+    return "-".join(part for part in (base, location, ident) if part)
+
+
 def tailor_resume(
     profile: Profile,
     job: Job,
@@ -389,22 +443,45 @@ def tailor_resume(
     write_cover_letter: bool = True,
     archetypes: dict[str, dict[str, Any]] | None = None,
 ) -> TailorResult:
+    missing = [
+        field
+        for field, value in (
+            ("name", profile.full_name),
+            ("email", profile.email),
+            ("phone", profile.phone),
+        )
+        if not str(value or "").strip()
+    ]
+    if missing:
+        raise ValueError(f"Profile is missing required contact fields: {', '.join(missing)}")
     jd = parse_jd(job.description or job.title, title_hint=job.title, company_hint=job.company, location_hint=job.location)
     selected, fact_ids = select_facts(profile, jd, max_per_entry=4)
     summary = summarize(profile, job, jd, llm)
     data = build_data(profile, jd, selected, summary=summary, archetypes=archetypes)
-    out_dir = Path(output_root) / slugify(job.company) / slugify(job.title, 60)
+    out_dir = Path(output_root) / slugify(job.company) / _output_dir_name(job)
     template = COMPACT_TEMPLATE if len(profile.projects) > 3 else TEMPLATE
     pdf_path, typ_path, data_path = render(data, out_dir, template=template)
+    ats = ats_check(pdf_path)
+    if ats.get("pages", 0) > 1 and template != COMPACT_TEMPLATE:
+        # Try the tighter layout before failing the one-page gate.
+        pdf_path, typ_path, data_path = render(data, out_dir, template=COMPACT_TEMPLATE)
+        ats = ats_check(pdf_path)
 
     cover_path = ""
     if write_cover_letter:
         text = cover_letter(profile, job, jd, llm)
-        cover_path_obj = out_dir / "cover_letter.txt"
-        cover_path_obj.write_text(text, encoding="utf-8")
-        cover_path = str(cover_path_obj)
+        (out_dir / "cover_letter.txt").write_text(text, encoding="utf-8")
+        # Most ATS upload controls accept PDF, not .txt. Keep the text for
+        # editing and hand the PDF path to the application/fill layer.
+        cover_pdf = out_dir / "cover_letter.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        rect = pymupdf.Rect(54, 54, page.rect.width - 54, page.rect.height - 54)
+        page.insert_textbox(rect, text, fontsize=11, fontname="helv")
+        doc.save(cover_pdf)
+        doc.close()
+        cover_path = str(cover_pdf)
 
-    ats = ats_check(pdf_path)
     warnings = list(ats.get("warnings", []))
     if not profile.facts:
         warnings.append("No fact bank found; bullets were copied from the parsed resume without selection")

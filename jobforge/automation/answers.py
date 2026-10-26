@@ -106,7 +106,15 @@ class AnswerBank:
                 return Answer("Yes" if authorized else "No", "work_authorization", "high")
             return Answer("", "work_authorization", "none")
         if re.search(r"(require|need).*(sponsor|visa)|sponsorship", canonical):
-            return Answer("Yes" if prefs.needs_sponsorship else "No", "sponsorship", "high")
+            value = None
+            for key in ("needs_sponsorship", "requires_sponsorship", "sponsorship"):
+                if key in profile.work_auth:
+                    value = _as_bool(profile.work_auth.get(key))
+                    if value is not None:
+                        break
+            if value is None:
+                value = prefs.needs_sponsorship
+            return Answer("Yes" if value else "No", "sponsorship", "high")
         if re.search(r"current (company|employer)|present employer", q):
             value = str((profile.experience[0] if profile.experience else {}).get("company", "") or "")
             return Answer(value, "current_company", "medium" if value else "none")

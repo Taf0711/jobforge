@@ -319,11 +319,20 @@ def score_all(
     profile: Profile,
     prefs: Preferences,
     limit: int | None = None,
+    *,
+    only_unscored: bool = False,
 ) -> dict[str, Any]:
     from .. import db
 
-    sql = "SELECT * FROM jobs ORDER BY id"
-    params: list[Any] = []
+    if only_unscored:
+        sql = (
+            "SELECT j.* FROM jobs j LEFT JOIN matches m "
+            "ON m.job_id=j.id AND m.profile_id=? WHERE m.score IS NULL ORDER BY j.id"
+        )
+        params: list[Any] = [profile.id]
+    else:
+        sql = "SELECT * FROM jobs ORDER BY id"
+        params = []
     if limit:
         sql += " LIMIT ?"
         params.append(limit)

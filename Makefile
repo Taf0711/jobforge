@@ -1,7 +1,7 @@
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 
-.PHONY: help bootstrap install setup app doctor serve test scan score tailor apply audit eval e2e clean
+.PHONY: help bootstrap install setup app doctor serve test scan score tailor apply audit eval e2e smoke lock clean
 
 help:
 	@echo "JobForge"
@@ -18,15 +18,17 @@ help:
 	@echo "  make audit       parity + security checks"
 	@echo "  make eval        deterministic ATS adapter eval (JSON)"
 	@echo "  make e2e         offline end-to-end smoke (JSON)"
+	@echo "  make smoke       live, non-submitting ATS fill smoke (network)"
+	@echo "  make lock        regenerate requirements.lock"
 	@echo "  make clean       remove caches (keeps data/)"
 
 bootstrap:
 	@if command -v uv >/dev/null 2>&1; then uv venv --python 3.11 .venv; else python3.11 -m venv .venv; fi
-	@if command -v uv >/dev/null 2>&1; then uv pip install --python $(PY) -r requirements.txt; else $(PIP) install --upgrade pip && $(PIP) install -r requirements.txt; fi
+	@if command -v uv >/dev/null 2>&1; then uv pip install --python $(PY) -r requirements.lock; else $(PIP) install --upgrade pip && $(PIP) install -r requirements.lock; fi
 	.venv/bin/playwright install chromium
 
 install:
-	$(PIP) install -r requirements.txt
+	$(PIP) install -r requirements.lock
 	.venv/bin/playwright install chromium
 
 setup:
@@ -64,6 +66,12 @@ eval:
 
 e2e:
 	$(PY) scripts/e2e_smoke.py --json
+
+smoke:
+	$(PY) scripts/smoke_live_ats.py --json
+
+lock:
+	uv pip compile requirements.txt -o requirements.lock
 
 clean:
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

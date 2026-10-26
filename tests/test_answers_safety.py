@@ -106,6 +106,17 @@ def test_work_authorization_and_clearance_require_explicit_profile_values(tmp_pa
     assert bank.answer("Do you hold a security clearance?", explicit, Preferences()).value == "Secret"
 
 
+def test_profile_sponsorship_overrides_default_preference(tmp_path: Path):
+    bank = _bank(tmp_path, {})
+    profile = Profile(work_auth={"needs_sponsorship": True})
+
+    assert (
+        bank.answer("Do you require visa sponsorship?", profile, Preferences())
+        .value
+        == "Yes"
+    )
+
+
 def test_normal_override_still_wins(tmp_path: Path):
     bank = _bank(tmp_path, {"notice period": "1 month"})
     profile = Profile()
