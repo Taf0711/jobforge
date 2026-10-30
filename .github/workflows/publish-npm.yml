@@ -1,0 +1,58 @@
+name: Publish npm installer
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (vX.Y.Z)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify package version matches tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          tag = os.environ["TAG"]
+          expected = tag[1:] if tag.startswith("v") else tag
+          version = json.load(open("installer/package.json"))["version"]
+          if version != expected:
+              sys.exit(f"installer/package.json is {version}; tag is {tag}")
+          print(f"Publishing jobforge@{version}")
+          PY
+
+      - name: Install installer dependencies
+        working-directory: installer
+        run: npm ci
+
+      - name: Check package contents
+        working-directory: installer
+        run: npm pack --dry-run
+
+      - name: Publish
+        working-directory: installer
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

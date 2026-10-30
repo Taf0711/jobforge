@@ -118,3 +118,15 @@ gh release create vX.Y.Z dist/*.whl dist/*.tar.gz
 
 Keep the private repo as the source of truth; the public repo is a release
 export.
+
+## npm installer release
+
+The `npx jobforge` wizard is the separate npm package in `installer/`. It is
+published independently from the Python wheel.
+
+- CI: `.github/workflows/publish-npm.yml` runs on `v*` tags and manual dispatch.
+  Add an npm **automation** token as the `NPM_TOKEN` repository secret.
+- `installer/package.json` version must equal the tag without the leading `v`.
+- Manual local publish: `scripts/publish_npm.sh` (pass `--otp CODE` when npm asks
+  for a one-time password).
+- `npm publish` uses 2FA unless the token is an automation token.

@@ -61,6 +61,9 @@ apply:
 audit:
 	$(PY) -m jobforge audit
 
+publish-npm:
+	scripts/publish_npm.sh
+
 eval:
 	$(PY) -m jobforge.audit.adapter_eval --all --json
 
