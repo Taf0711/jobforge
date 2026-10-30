@@ -25,6 +25,7 @@ def test_html_and_remote():
     assert "Hello world" in html_to_text("<div><p>Hello <b>world</b></p><script>x</script></div>")
     assert is_remote("Remote (US)")
     assert is_remote("San Francisco", "This role is remote-friendly")
+    assert not is_remote("San Francisco", "We are a remote-first company")
     assert not is_remote("New York, NY")
 
 

@@ -41,8 +41,8 @@
     <div class="panel-head"><h2>Application</h2></div>
     {% if application %}
       <p><span class="pill">{{ application.status }}</span>{% if application.error_code %} <span class="pill bad">{{ application.error_code }}</span>{% endif %}</p>
-      {% if application.resume_path %}<p class="muted">Resume: <code>{{ application.resume_path }}</code></p>{% endif %}
-      {% if application.screenshot_path %}<p><a class="link" href="file://{{ application.screenshot_path }}">Open pre-submit screenshot</a></p>{% endif %}
+      {% if application.resume_path %}<p class="muted">Resume: <a class="link" href="/artifacts/{{ application.id }}/resume">Open PDF</a></p>{% endif %}
+      {% if application.screenshot_path %}<p><a class="link" href="/artifacts/{{ application.id }}/screenshot">Open pre-submit screenshot</a></p>{% endif %}
       {% if application.answers %}
         <h3>Answers sent</h3>
         <table class="compact"><tbody>
@@ -144,6 +144,6 @@
 
 <section class="panel">
   <div class="panel-head"><h2>Job description</h2></div>
-  <pre class="jd">{{ job.description }}</pre>
+  <pre class="jd" data-ask-surface data-ask-context="Job description · {{ job.company }} — {{ job.title }}">{{ job.description }}</pre>
 </section>
 {% endblock %}

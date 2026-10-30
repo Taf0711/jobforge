@@ -150,7 +150,7 @@ def test_prepare_next_marks_prepared_and_persists(tmp_path: Path, monkeypatch):
     queue.build(conn, profile, prefs, limit=10)
     calls = []
 
-    def fake_tailor(cfg, connection, requested_job_id):
+    def fake_tailor(cfg, connection, requested_job_id, *, profile_id=None):
         calls.append((cfg, connection, requested_job_id))
         return {"pdf": str(resume)}
 
@@ -167,6 +167,72 @@ def test_prepare_next_marks_prepared_and_persists(tmp_path: Path, monkeypatch):
     reloaded = Queue(tmp_path / "queue.json").list_items("prepared")
     assert len(reloaded) == 1
     assert reloaded[0].resume_path == str(resume)
+
+
+def test_prepare_next_uses_the_item_profile_not_the_active_profile(
+    tmp_path: Path, monkeypatch
+):
+    config, conn, profile, prefs = _seed(tmp_path)
+    job_id = _add_job(conn, profile.id or 0, "Acme", "Engineer", 90)
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"%PDF-1.4")
+    queue = Queue(tmp_path / "queue.json")
+    queue.build(conn, profile, prefs, limit=10)
+
+    other_id = db.save_profile(conn, Profile(name="other"))
+    db.set_active_profile(conn, other_id)
+    seen = {}
+
+    def fake_tailor(cfg, connection, requested_job_id, *, profile_id=None):
+        seen["profile_id"] = profile_id
+        return {"pdf": str(resume)}
+
+    monkeypatch.setattr(services, "tailor_job", fake_tailor)
+
+    item = queue.prepare_next(config, conn)
+
+    assert item.job_id == job_id
+    assert seen["profile_id"] == profile.id
+    assert db.get_active_profile(conn).id == other_id
+
+
+def test_apply_next_uses_the_item_profile_and_syncs_the_application(
+    tmp_path: Path, monkeypatch
+):
+    config, conn, profile, prefs = _seed(tmp_path)
+    job_id = _add_job(conn, profile.id or 0, "Acme", "Engineer", 90)
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"%PDF-1.4")
+    queue = Queue(tmp_path / "queue.json")
+    queue.build(conn, profile, prefs, limit=10)
+    queue.mark_prepared(job_id, str(resume))
+    application_id = db.create_application(
+        conn,
+        Application(
+            job_id=job_id,
+            profile_id=profile.id,
+            status="prepared",
+            resume_path=str(resume),
+        ),
+    )
+    other_id = db.save_profile(conn, Profile(name="other"))
+    db.set_active_profile(conn, other_id)
+    seen = {}
+
+    def fake_apply(cfg, connection, requested_job_id, *, profile_id=None, **kwargs):
+        seen["profile_id"] = profile_id
+        return {"submitted": False}
+
+    monkeypatch.setattr(services, "apply_job", fake_apply)
+
+    item = queue.apply_next(config, conn, confirm=lambda: True)
+
+    assert seen["profile_id"] == profile.id
+    assert item.status == "submitted"
+    stored = db.get_application(conn, application_id)
+    assert stored is not None
+    assert stored.status == "submitted"
+    assert stored.submitted_at
 
 
 def test_prepare_next_records_failure(tmp_path: Path, monkeypatch):
@@ -196,7 +262,7 @@ def test_apply_next_marks_submitted_when_service_reports_it(tmp_path: Path, monk
     queue.mark_prepared(job_id, str(tmp_path / "resume.pdf"))
     calls = []
 
-    def fake_apply(cfg, connection, requested_job_id, *, hold_seconds=0):
+    def fake_apply(cfg, connection, requested_job_id, *, hold_seconds=0, **kwargs):
         calls.append((cfg, connection, requested_job_id, hold_seconds))
         return {"submitted": True, "notes": ["filled"]}
 
@@ -219,8 +285,9 @@ def test_apply_next_forces_review_mode_even_if_config_allows_submit(tmp_path: Pa
     queue.mark_prepared(job_id, str(tmp_path / "resume.pdf"))
     seen = {}
 
-    def fake_apply(cfg, connection, requested_job_id, *, hold_seconds=0):
+    def fake_apply(cfg, connection, requested_job_id, *, hold_seconds=0, **kwargs):
         seen["allow_submit"] = cfg.browser.allow_submit
+        seen["review_only"] = kwargs.get("review_only")
         return {"submitted": False}
 
     monkeypatch.setattr(services, "apply_job", fake_apply)
@@ -228,6 +295,7 @@ def test_apply_next_forces_review_mode_even_if_config_allows_submit(tmp_path: Pa
     queue.apply_next(config, conn)
 
     assert seen["allow_submit"] is False
+    assert seen["review_only"] is True
     assert config.browser.allow_submit is True
 
 
@@ -342,7 +410,7 @@ def test_apply_next_hold_without_confirm_keeps_prepared_and_notes_it(tmp_path: P
     queue.mark_prepared(job_id, str(tmp_path / "resume.pdf"))
     seen = {}
 
-    def fake_apply(cfg, connection, requested_job_id, *, hold_seconds=0):
+    def fake_apply(cfg, connection, requested_job_id, *, hold_seconds=0, **kwargs):
         seen["hold_seconds"] = hold_seconds
         return {"submitted": False}
 
@@ -420,3 +488,19 @@ def test_unknown_status_is_rejected(tmp_path: Path):
     queue = Queue(tmp_path / "queue.json")
     with pytest.raises(ValueError):
         queue.list_items("bogus")
+
+
+def test_mutations_reload_under_the_shared_lock(tmp_path: Path):
+    _, conn, profile, prefs = _seed(tmp_path)
+    job_id = _add_job(conn, profile.id or 0, "Acme", "Engineer", 90)
+    path = tmp_path / "queue.json"
+    first = Queue(path)
+    stale = Queue(path)  # cached empty view from before the first build
+
+    first.build(conn, profile, prefs, limit=10)
+    added = stale.build(conn, profile, prefs, limit=10)
+
+    assert added == []
+    assert [item.job_id for item in stale.list_items()] == [job_id]
+    stale.mark_skipped(job_id, note="reloaded")
+    assert Queue(path).list_items("skipped")[0].note == "reloaded"

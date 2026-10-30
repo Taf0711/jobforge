@@ -1,0 +1,77 @@
+{
+  "name": "ashby_n1_fill_resume",
+  "observation": {
+    "page_kind": "application_form",
+    "ats": "ashby",
+    "url": "https://example.com/ashby/apply",
+    "step": 0,
+    "fields": [
+      {
+        "field_id": "resume",
+        "label": "Resume",
+        "kind": "file",
+        "required": true,
+        "visible": true,
+        "enabled": true,
+        "value": "",
+        "category": "file",
+        "sensitive": false,
+        "has_grounded_answer": true,
+        "answer_value": "/tmp/resume.pdf",
+        "value_source": "resume"
+      },
+      {
+        "field_id": "location",
+        "label": "Location",
+        "kind": "combobox",
+        "required": true,
+        "visible": true,
+        "enabled": true,
+        "value": "",
+        "category": "location",
+        "sensitive": false,
+        "has_grounded_answer": true,
+        "answer_value": "New York City, New York, United States",
+        "value_source": "profile"
+      },
+      {
+        "field_id": "why_n1",
+        "label": "Why N1?",
+        "kind": "textarea",
+        "required": true,
+        "visible": true,
+        "enabled": true,
+        "value": "",
+        "category": "motivation",
+        "sensitive": false,
+        "has_grounded_answer": false,
+        "answer_value": "",
+        "value_source": "none"
+      }
+    ],
+    "buttons": [
+      {
+        "button_id": "submit",
+        "label": "Submit application",
+        "enabled": true,
+        "is_submit": true,
+        "is_next": false,
+        "is_back": false
+      }
+    ],
+    "validation_errors": [],
+    "captcha": false,
+    "two_factor": false,
+    "account_wall": false,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "application_id": "176",
+    "attempt": 0,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "upload_file",
+    "rule": "grounded_fill",
+    "target": "resume"
+  }
+}

@@ -104,6 +104,8 @@ class Profile:
     work_auth: dict[str, Any] = field(default_factory=dict)
     disclosures: dict[str, Any] = field(default_factory=dict)
     facts: list[dict[str, Any]] = field(default_factory=list)
+    evidence: dict[str, Any] = field(default_factory=dict)
+    context: dict[str, Any] = field(default_factory=dict)
 
     @property
     def full_name(self) -> str:

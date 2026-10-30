@@ -37,7 +37,8 @@ Installed wheels never write into site-packages:
 | override | `JOBFORGE_HOME` |
 
 The app home contains `config.yml`, `data/` (SQLite, queue, risk policy,
-screenshots, browser profile), `output/` (tailored resumes), and `network.yml`.
+screenshots, browser profile), `output/` (profile-scoped tailored resumes under
+`output/profile-<profile-id>/`), and `network.yml`.
 A source checkout keeps the historical repo-root layout for development.
 
 ## Commands

@@ -41,6 +41,27 @@ def test_partial_credit_from_adjacent_language():
     assert result.rows[0].matched_by.startswith("adjacent")
 
 
+def test_transfer_credit_uses_the_source_skill_evidence():
+    graph = SkillGraph()
+    direct = coverage(
+        [{"text": "Go", "skill": "Go", "importance": "must"}],
+        ["Go"],
+        graph,
+        {"Go": 0.4},
+        evidence_direct=True,
+    )
+    transfer = coverage(
+        [{"text": "Go", "skill": "Go", "importance": "must"}],
+        ["C++"],
+        graph,
+        {"C++": 0.4},
+    )
+
+    assert direct.coverage == 0.4
+    assert transfer.coverage == 0.2
+    assert direct.coverage > transfer.coverage
+
+
 def test_jd_sections_do_not_treat_responsibilities_as_requirements():
     text = """
     What You'll Be Doing

@@ -23,7 +23,7 @@ CLEARANCE_RANK = {
     "ts/sci": 3,
     "top secret": 3,
 }
-SENIOR_TITLE = re.compile(r"\b(senior|staff|principal|lead|architect|manager|director|vp|head)\b", re.IGNORECASE)
+SENIOR_TITLE = re.compile(r"\b(senior|sr\.?|staff|principal|lead|architect|manager|director|vp|head)\b", re.IGNORECASE)
 INTERN_TITLE = re.compile(r"\b(intern|internship|co-op|coop)\b", re.IGNORECASE)
 
 
@@ -31,7 +31,7 @@ def _profile_degree(profile: Profile) -> str:
     best = "none"
     for edu in profile.education:
         value = str(edu.get("degree", "")).lower()
-        if "ph" in value or "doctor" in value:
+        if "ph.d" in value or "phd" in value or "doctor" in value:
             rank = "phd"
         elif "master" in value or value in {"m.s", "ms", "m.a", "ma"}:
             rank = "masters"
@@ -68,16 +68,86 @@ def _years(profile: Profile, prefs: Preferences) -> float:
         return 0.0
 
 
+def _role_is_remote(job: Job, jd: JD) -> bool:
+    # Existing rows can carry a stale remote=True flag from a company blurb.
+    # Trust it only when the stored location is actually remote/empty; otherwise
+    # use the fixed location-aware parser result.
+    if jd.remote:
+        return True
+    loc = (job.location or "").lower()
+    remote_markers = ("remote", "work from home", "distributed", "anywhere", "worldwide", "global")
+    return bool(job.remote and (not loc or any(token in loc for token in remote_markers)))
+
+
+US_REMOTE_MARKERS = (
+    "united states", "usa", "u.s.", "us only", "remote us", "remote - us",
+    "remote (us)", "america", "new york", "san francisco", "seattle", "boston",
+    "austin", "chicago", "denver", "washington", "atlanta", "miami",
+)
+NON_US_REMOTE_MARKERS = (
+    "india", "brazil", "canada", "mexico", "argentina", "united kingdom", " uk",
+    "london", "europe", "emea", "apac", "australia", "germany", "france", "spain",
+    "portugal", "lisbon", "singapore", "japan", "tokyo", "korea", "china", "poland",
+    "ireland", "dublin", "netherlands", "amsterdam", "sweden", "switzerland",
+    "israel", "tel aviv", "dubai", "uae", "south africa", "new zealand",
+    "philippines", "nigeria", "kenya", "pakistan", "bangladesh", "sri lanka",
+    "nepal", "colombia", "costa rica",
+)
+
+
+def _remote_scope_allowed(location: str, prefs: Preferences) -> bool:
+    loc = _normalized_location(location)
+    if not loc:
+        return True
+    us = any(marker in loc for marker in US_REMOTE_MARKERS)
+    non_us = any(marker in loc for marker in NON_US_REMOTE_MARKERS)
+    if us:
+        return True
+    if not non_us:
+        return True
+    # A candidate can explicitly target a non-US location.
+    return any(
+        any(marker in _normalized_location(wanted) for marker in NON_US_REMOTE_MARKERS)
+        for wanted in prefs.locations
+    )
+
+
+def _normalized_location(value: str) -> str:
+    text = (value or "").lower().strip()
+    replacements = (
+        ("new york city", "new york"),
+        ("nyc", "new york"),
+        ("san francisco bay area", "san francisco"),
+        ("bay area", "san francisco"),
+        ("sf", "san francisco"),
+        ("washington, d.c.", "washington"),
+        ("washington dc", "washington"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
 def _location_gate(job: Job, jd: JD, prefs: Preferences) -> tuple[float, str]:
-    if job.remote or jd.remote:
-        return 1.0, "Remote role"
+    remote = _role_is_remote(job, jd)
+    if remote:
+        if not _remote_scope_allowed(job.location or jd.location, prefs):
+            return 0.25, f"Remote scope outside your location preferences: {job.location}"
+        remote_wanted = (
+            not prefs.locations
+            or any("remote" in str(item).lower() for item in prefs.locations)
+            or any("remote" in str(item).lower() for item in prefs.work_modes)
+        )
+        if remote_wanted:
+            return 1.0, "Remote role"
+        return 0.55, "Remote role outside your work-mode preference"
     if not prefs.locations:
         return 1.0, "No location preference"
-    job_loc = (job.location or jd.location or "").lower()
+    job_loc = _normalized_location(job.location or jd.location)
     if not job_loc:
         return 0.8, "Location not listed"
     for wanted in prefs.locations:
-        wanted = wanted.lower().strip()
+        wanted = _normalized_location(wanted)
         if not wanted:
             continue
         if wanted in job_loc or job_loc in wanted:
@@ -145,6 +215,8 @@ def score_job(
     profile: Profile,
     prefs: Preferences,
     graph: SkillGraph | None = None,
+    *,
+    scoring_v2: bool = True,
 ) -> MatchResult:
     graph = graph or GRAPH
     text = job.description or f"{job.title}\n{job.location}"
@@ -156,7 +228,14 @@ def score_job(
     if not requirements:
         requirements = [{"text": job.title, "skill": None, "importance": "must", "kind": "prose"}]
 
-    coverage_result = coverage(requirements, _all_profile_skills(profile), graph, _evidence(profile))
+    coverage_result = coverage(
+        requirements,
+        _all_profile_skills(profile),
+        graph,
+        _evidence(profile),
+        prose_credit=0.0 if scoring_v2 else 0.60,
+        evidence_direct=scoring_v2,
+    )
 
     gates: list[tuple[float, str, str]] = []  # (survival, reason, gap)
     years_have = _years(profile, prefs)
@@ -240,17 +319,22 @@ def score_job(
     title_gate, title_reason = _title_gate(job, prefs)
     gates.append((title_gate, title_reason, "" if title_gate >= 0.8 else "Title level mismatch"))
 
-    if prefs.salary_min and job.salary_max and job.salary_max < prefs.salary_min:
-        gates.append((0.80, "", f"Posted max ${job.salary_max:,} below your ${prefs.salary_min:,} floor"))
-    elif prefs.salary_min and job.salary_min and job.salary_min >= prefs.salary_min:
-        gates.append((1.0, f"Salary band starts at ${job.salary_min:,}", ""))
+    gate_salary_min = job.salary_min if job.salary_min is not None else jd.salary_min
+    gate_salary_max = job.salary_max if job.salary_max is not None else jd.salary_max
+    if prefs.salary_min and gate_salary_max and gate_salary_max < prefs.salary_min:
+        gates.append((0.80, "", f"Posted max ${gate_salary_max:,} below your ${prefs.salary_min:,} floor"))
+    elif prefs.salary_min and gate_salary_min and gate_salary_min >= prefs.salary_min:
+        gates.append((1.0, f"Salary band starts at ${gate_salary_min:,}", ""))
 
     survival = 1.0
     for value, _, _ in gates:
         survival *= value
     survival = max(0.0, min(1.0, survival))
 
-    parsed_skills = [r for r in jd.requirements if r.get("skill")]
+    parsed_skills = [
+        r for r in jd.requirements
+        if r.get("skill") and str(r.get("importance", "")).lower() in {"must", "nice"}
+    ]
     thin_jd = not parsed_skills
     score = round(100.0 * coverage_result.coverage * survival * (0.5 if thin_jd else 1.0), 1)
     reasons = [reason for _, reason, _ in gates if reason]
@@ -321,6 +405,7 @@ def score_all(
     limit: int | None = None,
     *,
     only_unscored: bool = False,
+    scoring_v2: bool = True,
 ) -> dict[str, Any]:
     from .. import db
 
@@ -341,7 +426,7 @@ def score_all(
     comp_counts: dict[str, int] = {}
     for row in rows:
         job = db._job_from_row(row)
-        result = score_job(job, profile, prefs)
+        result = score_job(job, profile, prefs, scoring_v2=scoring_v2)
         if job.id is not None:
             db.set_match(conn, result)
             scored += 1

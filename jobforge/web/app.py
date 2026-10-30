@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
+from functools import wraps
 from pathlib import Path
 from typing import Any, Generator
 from urllib.parse import urlsplit
@@ -16,21 +17,32 @@ import yaml
 
 import uvicorn
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .. import db, quality, risk, services
+from ..autopilot import latest_digest, launch_subprocess as launch_autopilot, status_payload
+from ..agent.providers import (
+    ProviderCredentialStore,
+    infer_provider,
+    provider_status,
+    resolve_provider,
+)
 from ..automation.base import is_manual_only_url
-from ..config import Config, load_config
+from ..config import Config, FeatureFlags, load_config
 from ..integrations import github as github_integration
+from ..locking import ActionBusy, action_lock
 from ..matching.resume import load_profile_file
-from ..models import ApplicationStatus, Preferences
+from ..models import ApplicationStatus, Preferences, Profile
 from ..paths import default_config_path
 from ..queue import Queue
 from ..sources.registry import SOURCES, configured_boards
+from ..workbench.worker import launch_worker
 from . import setup_presets
+from .agent_routes import create_agent_router
 from .answers_routes import create_answers_router
+from .provider_routes import create_provider_router
 
 WEB_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
@@ -106,11 +118,38 @@ def _preferences_from_form(
     )
 
 
+SOURCE_MIXES: dict[str, list[str]] = {
+    "recommended": ["ai", "product", "github_lists"],
+    "broad": ["ai", "fintech", "product", "public", "github_lists"],
+    "minimal": ["github_lists"],
+}
+
+
+def _source_mix_value(selected: list[str]) -> str:
+    current = set(selected)
+    if current == set(SOURCE_MIXES["recommended"]):
+        return "recommended"
+    if current == set(SOURCE_MIXES["broad"]):
+        return "broad"
+    if current == set(SOURCE_MIXES["minimal"]):
+        return "minimal"
+    return "keep" if current else "recommended"
+
+
 def _setup_state(cfg: Config, conn: sqlite3.Connection, profile: Any) -> dict[str, Any]:
     complete = db.setting_get(conn, "setup_complete") == "1"
     has_profile = bool(profile and (profile.facts or profile.resume_path or profile.email))
     has_sources = any(configured_boards(cfg, name) for name in SOURCES) or setup_presets.public_source_enabled(cfg)
     jobs = int(db.stats(conn, profile.id or 0).get("jobs", 0)) if profile else 0
+    if not cfg.features.setup_wizard:
+        return {
+            "complete": complete,
+            "has_profile": has_profile,
+            "has_sources": has_sources,
+            "jobs": jobs,
+            "incomplete": False,
+            "first_run": False,
+        }
     incomplete = not complete and not (has_profile and has_sources)
     first_run = not complete and not has_profile and not has_sources and jobs == 0
     return {
@@ -168,7 +207,7 @@ def _import_profile_upload(cfg: Config, conn: sqlite3.Connection, file: UploadFi
     return profile
 
 
-def _write_setup_config(cfg: Config, sources: dict[str, Any], scan: dict[str, Any]) -> Path:
+def _write_config_sections(cfg: Config, updates: dict[str, Any]) -> Path:
     path = Path(cfg.config_path) if cfg.config_path else default_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, Any] = {}
@@ -179,8 +218,7 @@ def _write_setup_config(cfg: Config, sources: dict[str, Any], scan: dict[str, An
                 data = loaded
         except (OSError, yaml.YAMLError):
             data = {}
-    data["sources"] = sources
-    data["scan"] = scan
+    data.update(updates)
     fd, temp_name = tempfile.mkstemp(prefix=".config-", dir=str(path.parent), text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -190,9 +228,19 @@ def _write_setup_config(cfg: Config, sources: dict[str, Any], scan: dict[str, An
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
-    cfg.sources = sources
-    cfg.scan = scan
+    for key, value in updates.items():
+        setattr(cfg, key, value)
     cfg.config_path = path
+    return path
+
+
+def _write_setup_config(cfg: Config, sources: dict[str, Any], scan: dict[str, Any]) -> Path:
+    return _write_config_sections(cfg, {"sources": sources, "scan": scan})
+
+
+def _write_feature_config(cfg: Config, flags: FeatureFlags) -> Path:
+    path = _write_config_sections(cfg, {"features": flags.to_dict()})
+    cfg.features = flags
     return path
 
 
@@ -201,8 +249,52 @@ def create_app(config: Config | None = None) -> FastAPI:
     db.init_db(cfg.db_path)
 
     app = FastAPI(title="JobForge", docs_url="/api/docs", redoc_url=None)
+
+    @app.exception_handler(ActionBusy)
+    async def action_busy_handler(request: Request, exc: ActionBusy):
+        detail = "Another JobForge action is running. Wait for it to finish and try again."
+        path = request.url.path
+        if path.startswith("/api/") or "application/json" in request.headers.get(
+            "accept", ""
+        ):
+            return JSONResponse({"error": "busy", "detail": detail}, status_code=409)
+        if path.startswith("/setup/"):
+            target = "/setup"
+        elif path.startswith("/connections"):
+            target = "/connections"
+        elif path.startswith("/providers"):
+            target = "/providers"
+        elif path.startswith("/settings") or path == "/export":
+            target = "/settings"
+        elif path.startswith("/email"):
+            target = "/inbox"
+        elif path.startswith("/jobs/"):
+            target = path.rsplit("/", 1)[0]
+        elif path.startswith("/applications"):
+            target = "/applications"
+        elif path.startswith("/profiles"):
+            target = "/profiles"
+        elif path.startswith("/autopilot"):
+            target = "/autopilot"
+        else:
+            target = "/"
+        return RedirectResponse(f"{target}?msg={_msg(detail)}", status_code=303)
+
+    @app.exception_handler(services.SetupRequired)
+    async def setup_required_handler(request: Request, exc: services.SetupRequired):
+        wants_json = request.url.path.startswith("/api/") or "application/json" in request.headers.get(
+            "accept", ""
+        )
+        if wants_json or not cfg.features.setup_wizard:
+            return JSONResponse(
+                {"error": "setup_required", "detail": str(exc)}, status_code=409
+            )
+        return RedirectResponse("/setup", status_code=303)
+
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
     app.include_router(create_answers_router(cfg))
+    app.include_router(create_agent_router(cfg))
+    app.include_router(create_provider_router(cfg))
 
     def get_conn() -> Generator[sqlite3.Connection, None, None]:
         conn = db.connect(cfg.db_path)
@@ -210,6 +302,16 @@ def create_app(config: Config | None = None) -> FastAPI:
             yield conn
         finally:
             conn.close()
+
+    def locked_write(fn):
+        """Serialize a dashboard mutation with other domain actions."""
+
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            with action_lock(cfg, blocking=False):
+                return fn(*args, **kwargs)
+
+        return wrapper
 
     @app.middleware("http")
     async def security_middleware(request: Request, call_next):
@@ -221,10 +323,25 @@ def create_app(config: Config | None = None) -> FastAPI:
                 if not host or parsed.scheme != request.url.scheme or parsed.netloc != host:
                     return JSONResponse({"error": "cross-origin request blocked"}, status_code=403)
 
+        if request.url.path.startswith("/connections") and not cfg.features.github_connections:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if request.url.path.startswith("/setup") and not cfg.features.setup_wizard:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if request.url.path.startswith(("/agent", "/providers", "/api/agent")) and not cfg.features.agent:
+            return JSONResponse({"error": "not found"}, status_code=404)
+
         # The optional bearer token protects every route except the health check
         # and the token login endpoint. This covers unsafe writes and the
         # answer-bank GETs, which can expose salary/authorization answers.
-        if cfg.server.token and request.url.path not in {"/healthz", "/auth"}:
+        public_paths = {
+            "/healthz",
+            "/auth",
+            # OAuth callback is reached by a cross-site redirect; the random
+            # state and PKCE verifier are the authorization proof. The token
+            # cookie is SameSite=strict and may not survive that redirect.
+            "/providers/oauth/openrouter/callback",
+        }
+        if cfg.server.token and request.url.path not in public_paths:
             supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
             cookie = request.cookies.get("jf_token", "")
             if not (
@@ -245,9 +362,27 @@ def create_app(config: Config | None = None) -> FastAPI:
         response.headers["Referrer-Policy"] = "same-origin"
         return response
 
-    def context(request: Request, conn: sqlite3.Connection) -> dict[str, Any]:
-        profile, prefs = services.ensure_profile(cfg, conn)
+    def context(
+        request: Request, conn: sqlite3.Connection, *, allow_missing: bool = False
+    ) -> dict[str, Any]:
+        profile, prefs = services.read_profile(cfg, conn)
+        if profile is None:
+            if not allow_missing and cfg.features.setup_wizard:
+                raise services.SetupRequired(
+                    "JobForge setup is incomplete; run `jobforge setup` first"
+                )
+            # The setup page, and an installation with the setup wizard
+            # disabled, must render before a profile exists. This placeholder
+            # is never persisted and never reaches a domain query.
+            profile, prefs = Profile(name=""), Preferences()
         setup_state = _setup_state(cfg, conn, profile)
+        agent_ready = False
+        if cfg.features.agent:
+            try:
+                resolve_provider(cfg, conn, store=ProviderCredentialStore(cfg.data_dir))
+                agent_ready = True
+            except Exception:  # noqa: BLE001 - readiness is display-only
+                agent_ready = False
         return {
             "request": request,
             "profile": profile,
@@ -257,6 +392,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             "setup_state": setup_state,
             "setup_incomplete": setup_state["incomplete"],
             "setup_complete": setup_state["complete"],
+            "features": cfg.features,
+            "agent_ready": agent_ready,
+            "active_provider": infer_provider(cfg.llm),
+            "active_model": cfg.llm.model,
         }
 
     @app.get("/", response_class=HTMLResponse)
@@ -283,10 +422,24 @@ def create_app(config: Config | None = None) -> FastAPI:
                 job["warm_score"] = warm["score"]
         apps = db.list_applications(conn, profile.id, limit=8)
         runs = db.list_runs(conn, 6)
+        github_lead_jobs = db.list_jobs(
+            conn, profile.id, source="github_jobs", min_score=0, limit=5
+        )
+        github_lead_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE source='github_jobs'"
+        ).fetchone()["n"]
         return templates.TemplateResponse(
             request=request,
             name="dashboard.html",
-            context={**ctx, "stats": stats, "jobs": jobs, "apps": apps, "runs": runs},
+            context={
+                **ctx,
+                "stats": stats,
+                "jobs": jobs,
+                "apps": apps,
+                "runs": runs,
+                "github_lead_jobs": github_lead_jobs,
+                "github_lead_count": github_lead_count,
+            },
         )
 
     @app.get("/jobs", response_class=HTMLResponse)
@@ -315,22 +468,41 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.get("/setup", response_class=HTMLResponse)
     def setup_page(request: Request, step: int = 1, conn: sqlite3.Connection = Depends(get_conn)):
-        ctx = context(request, conn)
-        step = max(1, min(4, step))
+        ctx = context(request, conn, allow_missing=True)
+        profile = ctx["profile"]
+        prefs = ctx["prefs"]
+        ready_step = 3
+        step = max(1, min(ready_step, step))
         selected = setup_presets.selected_presets(cfg)
         custom = setup_presets.custom_boards(cfg)
         source_count = setup_presets.source_board_count(cfg.sources or {})
         scan = cfg.scan or {}
+        profile_titles = [
+            str(item.get("title") or "")
+            for item in (profile.experience or [])
+            if isinstance(item, dict) and str(item.get("title") or "").strip()
+        ]
+        default_titles = prefs.titles or profile_titles[:1]
+        default_locations = prefs.locations or ([profile.location] if profile.location else [])
+        cards = (
+            provider_status(cfg, conn, store=ProviderCredentialStore(cfg.data_dir))
+            if step == 3 and cfg.features.agent
+            else []
+        )
         return templates.TemplateResponse(
             request=request,
             name="setup.html",
             context={
                 **ctx,
                 "step": step,
+                "ready_step": ready_step,
                 "presets": setup_presets.PRESETS,
                 "selected_presets": selected,
                 "custom": custom,
                 "source_count": source_count,
+                "source_mix": _source_mix_value(selected),
+                "default_titles": default_titles,
+                "default_locations": default_locations,
                 "github_connected": bool(db.get_connection(conn, "github")),
                 "github_repo_count": db.count_github_repos(conn, include_ignored=True),
                 "typst_ready": bool(shutil.which("typst")),
@@ -339,10 +511,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "scan_keywords": ", ".join(str(v) for v in (scan.get("keywords") or [])),
                 "scan_exclude": ", ".join(str(v) for v in (scan.get("exclude_keywords") or [])),
                 "max_new": int(scan.get("max_new") or 500),
+                "cards": cards,
+                "active_provider": infer_provider(cfg.llm),
+                "active_model": cfg.llm.model,
+                "agent_ready": ctx["agent_ready"],
             },
         )
 
     @app.post("/setup/profile")
+    @locked_write
     def setup_profile(
         action: str = Form("upload"),
         file: UploadFile | None = File(None),
@@ -366,6 +543,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return RedirectResponse(f"/setup?step=2&msg={_msg(message)}", status_code=303)
 
     @app.post("/setup/preferences")
+    @locked_write
     def setup_preferences(
         titles: str = Form(""),
         locations: str = Form(""),
@@ -379,8 +557,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         excluded_companies: str = Form(""),
         excluded_keywords: str = Form(""),
         included_keywords: str = Form(""),
+        source_mix: str = Form("recommended"),
+        greenhouse_custom: str = Form(""),
+        lever_custom: str = Form(""),
+        ashby_custom: str = Form(""),
+        workable_custom: str = Form(""),
+        workday_custom: str = Form(""),
+        smartrecruiters_custom: str = Form(""),
+        github_jobs_custom: str = Form(""),
+        scan_keywords: str = Form(""),
+        scan_exclude: str = Form(""),
+        max_new: int = Form(500),
         conn: sqlite3.Connection = Depends(get_conn),
     ):
+        # Setup is allowed to create the default profile when the human skipped
+        # the resume upload. Normal dashboard writes still use require_profile.
         profile, _ = services.ensure_profile(cfg, conn)
         prefs = _preferences_from_form(
             titles=titles,
@@ -397,22 +588,60 @@ def create_app(config: Config | None = None) -> FastAPI:
             included_keywords=included_keywords,
         )
         db.save_preferences(conn, profile.id or 0, prefs)
+        mix = (source_mix or "").strip()
+        custom = {
+            "greenhouse": greenhouse_custom,
+            "lever": lever_custom,
+            "ashby": ashby_custom,
+            "workable": workable_custom,
+            "workday": workday_custom,
+            "smartrecruiters": smartrecruiters_custom,
+            "github_jobs": github_jobs_custom,
+        }
+        if mix == "keep" and (cfg.sources or {}):
+            sources = setup_presets.merge_sources(
+                cfg.sources, setup_presets.build_sources([], custom)
+            )
+        else:
+            selected = SOURCE_MIXES.get(mix)
+            if selected is None:
+                selected = setup_presets.selected_presets(cfg)
+                if not selected:
+                    selected = SOURCE_MIXES["recommended"]
+            sources = setup_presets.build_sources(selected, custom)
+        scan = {
+            "keywords": _split_csv(scan_keywords),
+            "exclude_keywords": _split_csv(scan_exclude),
+            "max_new": max(0, int(max_new or 0)),
+        }
+        try:
+            _write_setup_config(cfg, sources, scan)
+        except (OSError, yaml.YAMLError, ValueError) as exc:
+            return RedirectResponse(
+                f"/setup?step=2&msg={_msg('Could not save sources: ' + str(exc))}",
+                status_code=303,
+            )
         if db.stats(conn, profile.id or 0).get("jobs", 0):
             services.rescore(cfg, conn)
-        return RedirectResponse(f"/setup?step=3&msg={_msg('Targets saved')}", status_code=303)
+        return RedirectResponse(
+            f"/setup?step=3&msg={_msg('Targets and sources saved')}", status_code=303
+        )
 
     @app.post("/setup/sources")
+    @locked_write
     def setup_sources(
         preset_ai: str = Form(""),
         preset_fintech: str = Form(""),
         preset_product: str = Form(""),
         preset_public: str = Form(""),
+        preset_github_lists: str = Form(""),
         greenhouse_custom: str = Form(""),
         lever_custom: str = Form(""),
         ashby_custom: str = Form(""),
         workable_custom: str = Form(""),
         workday_custom: str = Form(""),
         smartrecruiters_custom: str = Form(""),
+        github_jobs_custom: str = Form(""),
         scan_keywords: str = Form(""),
         scan_exclude: str = Form(""),
         max_new: int = Form(500),
@@ -425,6 +654,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 ("fintech", preset_fintech),
                 ("product", preset_product),
                 ("public", preset_public),
+                ("github_lists", preset_github_lists),
             )
             if value
         ]
@@ -435,6 +665,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "workable": workable_custom,
             "workday": workday_custom,
             "smartrecruiters": smartrecruiters_custom,
+            "github_jobs": github_jobs_custom,
         }
         sources = setup_presets.build_sources(selected, custom)
         if not sources:
@@ -454,10 +685,41 @@ def create_app(config: Config | None = None) -> FastAPI:
                 f"/setup?step=3&msg={_msg('Could not save sources: ' + str(exc))}",
                 status_code=303,
             )
-        return RedirectResponse(f"/setup?step=4&msg={_msg('Sources saved')}", status_code=303)
+        return RedirectResponse(f"/setup?step=3&msg={_msg('Sources saved')}", status_code=303)
+
+    @app.post("/setup/models")
+    def setup_models(
+        action: str = Form("skip"),
+        provider_id: str = Form(""),
+        key: str = Form(""),
+        base_url: str = Form(""),
+        model: str = Form(""),
+    ):
+        message = (
+            "Model setup moved to Models. The deterministic workbench does not need a provider."
+            if cfg.features.agent
+            else "The agent feature is off; model setup is unavailable."
+        )
+        return RedirectResponse(
+            f"/setup?step=3&msg={_msg(message)}", status_code=303
+        )
 
     @app.post("/setup/finish")
+    @locked_write
     def setup_finish(conn: sqlite3.Connection = Depends(get_conn)):
+        # Finishing setup is an explicit initialization. If the human skipped
+        # the profile upload, create the default profile now rather than on a
+        # later read.
+        services.ensure_profile(cfg, conn)
+        if not setup_presets.source_board_count(cfg.sources or {}):
+            sources = setup_presets.build_sources(SOURCE_MIXES["recommended"], {})
+            try:
+                _write_setup_config(cfg, sources, cfg.scan or {})
+            except (OSError, yaml.YAMLError, ValueError) as exc:
+                return RedirectResponse(
+                    f"/setup?step=3&msg={_msg('Could not save default sources: ' + str(exc))}",
+                    status_code=303,
+                )
         db.setting_set(conn, "setup_complete", "1")
         db.log_event(conn, None, "setup", "completed")
         return RedirectResponse(
@@ -465,7 +727,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/setup/skip")
+    @locked_write
     def setup_skip(conn: sqlite3.Connection = Depends(get_conn)):
+        services.ensure_profile(cfg, conn)
         db.setting_set(conn, "setup_complete", "1")
         db.log_event(conn, None, "setup", "skipped")
         return RedirectResponse(
@@ -504,6 +768,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/scan/run")
+    @locked_write
     def scan_run(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         stats = services.scan(cfg, conn)
         msg = f"Scan: {stats.get('new', 0)} new, {stats.get('seen', 0)} seen"
@@ -526,12 +791,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         return RedirectResponse(f"/?msg={_msg(msg)}", status_code=303)
 
     @app.post("/score/run")
+    @locked_write
     def score_run(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         result = services.rescore(cfg, conn)
         msg = f"Rescored {result['scored']} jobs"
         return RedirectResponse(f"/?msg={_msg(msg)}", status_code=303)
 
     @app.post("/jobs/{job_id}/tailor")
+    @locked_write
     def tailor(job_id: int, request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         try:
             result = services.tailor_job(cfg, conn, job_id)
@@ -541,6 +808,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return RedirectResponse(f"/jobs/{job_id}?msg={_msg(msg)}", status_code=303)
 
     @app.post("/jobs/{job_id}/apply")
+    @locked_write
     def apply(job_id: int, request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         job = db.get_job(conn, job_id)
         if job is None:
@@ -551,19 +819,15 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "Open the posting and apply yourself."
             )
             return RedirectResponse(f"/jobs/{job_id}?msg={_msg(msg)}", status_code=303)
-        profile, prefs = services.ensure_profile(cfg, conn)
+        profile, prefs = services.require_profile(cfg, conn)
         report = quality.evaluate(conn, job, profile, prefs)
         if not report.ready:
             msg = f"Apply blocked: {quality.QualityBlocked(report)}"
             return RedirectResponse(f"/jobs/{job_id}?msg={_msg(msg)}", status_code=303)
-        if cfg.browser.allow_submit:
-            allowed, reason, _policy = risk.can_submit_unattended(cfg)
-            if not allowed:
-                return RedirectResponse(
-                    f"/jobs/{job_id}?msg={_msg('Apply blocked: ' + reason)}", status_code=303
-                )
         try:
-            pid = services.launch_apply_subprocess(cfg, job_id, hold_seconds=600)
+            pid = services.launch_apply_subprocess(
+                cfg, job_id, hold_seconds=600, review_only=True
+            )
             msg = f"Browser opening in a separate process (pid {pid}). Review and submit manually."
         except Exception as exc:
             msg = f"Apply failed: {exc}"
@@ -583,15 +847,71 @@ def create_app(config: Config | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/autopilot", response_class=HTMLResponse)
+    def autopilot_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+        ctx = context(request, conn)
+        queue = Queue(cfg.data_dir / "queue.json")
+        allowed, reason, _policy = risk.can_submit_autopilot(cfg)
+        return templates.TemplateResponse(
+            request=request,
+            name="autopilot.html",
+            context={
+                **ctx,
+                "risk": risk.status(cfg),
+                "can_submit": allowed,
+                "submit_reason": reason,
+                "digest": latest_digest(cfg),
+                "queue_summary": queue.summary(),
+            },
+        )
+
+    @app.get("/api/autopilot/status")
+    def autopilot_status():
+        return status_payload(cfg)
+
+    @app.post("/autopilot/run")
+    @locked_write
+    def autopilot_run(
+        limit: int = Form(5),
+        min_score: float | None = Form(None),
+        scan: str = Form(""),
+        score: str = Form(""),
+        dry_run: str = Form(""),
+        mode: str = Form(""),
+    ):
+        dry = (mode != "live") if mode else bool(dry_run)
+        if not dry:
+            allowed, reason, _policy = risk.can_submit_autopilot(cfg)
+            if not allowed:
+                return RedirectResponse(
+                    f"/autopilot?msg={_msg(reason)}", status_code=303
+                )
+        try:
+            pid = launch_autopilot(
+                cfg,
+                limit=max(1, min(10, int(limit or 5))),
+                min_score=min_score,
+                scan=bool(scan),
+                score=bool(score),
+                dry_run=dry,
+            )
+            mode = "dry run" if dry else "autopilot run"
+            message = f"Autopilot {mode} started (pid {pid}). Refresh for the digest."
+        except Exception as exc:  # noqa: BLE001
+            message = f"Could not start autopilot: {exc}"
+        return RedirectResponse(f"/autopilot?msg={_msg(message)}", status_code=303)
+
     @app.post("/jobs/{job_id}/save")
+    @locked_write
     def save_job(job_id: int, request: Request, conn: sqlite3.Connection = Depends(get_conn)):
-        profile, _ = services.ensure_profile(cfg, conn)
+        profile, _ = services.require_profile(cfg, conn)
         db.set_saved(conn, job_id, profile.id or 0, True)
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
     @app.post("/jobs/{job_id}/hide")
+    @locked_write
     def hide_job(job_id: int, request: Request, conn: sqlite3.Connection = Depends(get_conn)):
-        profile, _ = services.ensure_profile(cfg, conn)
+        profile, _ = services.require_profile(cfg, conn)
         db.set_hidden(conn, job_id, profile.id or 0, True)
         return RedirectResponse("/jobs", status_code=303)
 
@@ -606,6 +926,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/applications/{app_id}/status")
+    @locked_write
     def update_status(
         app_id: int,
         request: Request,
@@ -615,9 +936,173 @@ def create_app(config: Config | None = None) -> FastAPI:
         valid = {s.value for s in ApplicationStatus}
         if status not in valid:
             raise HTTPException(status_code=400, detail="Invalid status")
-        db.update_application(conn, app_id, status=status)
+        profile, _prefs = services.read_profile(cfg, conn)
+        application = db.get_application(conn, app_id)
+        if (
+            profile is None
+            or application is None
+            or int(application.profile_id or 0) != int(profile.id or 0)
+        ):
+            raise HTTPException(status_code=404, detail="Application not found")
+        fields: dict[str, Any] = {"status": status}
+        if status == ApplicationStatus.SUBMITTED.value and not application.submitted_at:
+            fields["submitted_at"] = db.utcnow()
+        db.update_application(conn, app_id, **fields)
         db.log_event(conn, app_id, "status", status)
         return RedirectResponse("/applications", status_code=303)
+
+    def _operation_view(conn: sqlite3.Connection, operation: dict[str, Any]) -> dict[str, Any]:
+        job = None
+        job_id = int((operation.get("payload") or {}).get("job_id") or 0)
+        if job_id:
+            job = db.get_job(conn, job_id)
+        result = operation.get("result") or {}
+        artifact_url = (
+            f"/artifacts/{int(result['application_id'])}/resume"
+            if result.get("application_id")
+            else ""
+        )
+        return {
+            "operation": operation,
+            "job": job,
+            "artifact_url": artifact_url,
+        }
+
+    @app.get("/operations", response_class=HTMLResponse)
+    def operations_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+        ctx = context(request, conn)
+        rows = db.list_agent_operations(
+            conn, profile_id=ctx["profile"].id, limit=50
+        )
+        operations = [_operation_view(conn, row) for row in rows]
+        return templates.TemplateResponse(
+            request=request,
+            name="operations.html",
+            context={**ctx, "operations": operations},
+        )
+
+    @app.get("/operations/{operation_id}", response_class=HTMLResponse)
+    def operation_detail(
+        operation_id: str, request: Request, conn: sqlite3.Connection = Depends(get_conn)
+    ):
+        ctx = context(request, conn)
+        operation = db.get_agent_operation(conn, operation_id)
+        if operation is None or int(operation["profile_id"]) != int(ctx["profile"].id or 0):
+            raise HTTPException(status_code=404, detail="Operation not found")
+        return templates.TemplateResponse(
+            request=request,
+            name="operation.html",
+            context={**ctx, **_operation_view(conn, operation)},
+        )
+
+    @app.post("/operations/{operation_id}/approve")
+    def operation_approve(
+        operation_id: str, conn: sqlite3.Connection = Depends(get_conn)
+    ):
+        before = db.get_agent_operation(conn, operation_id)
+        profile, _prefs = services.read_profile(cfg, conn)
+        if (
+            before is None
+            or profile is None
+            or int(before["profile_id"]) != int(profile.id or 0)
+        ):
+            raise HTTPException(status_code=404, detail="Operation not found")
+        if before["state"] == "pending_approval" and before["expires_at"] < db.utcnow():
+            db.update_agent_operation(
+                conn, operation_id, state="expired", finished_at=db.utcnow()
+            )
+            db.append_agent_operation_event(conn, operation_id, "expired", {})
+            return RedirectResponse(
+                f"/operations/{operation_id}?msg={_msg('This request expired before approval.')}",
+                status_code=303,
+            )
+        with action_lock(cfg):
+            operation = db.approve_agent_operation(conn, operation_id)
+        if operation and operation.get("state") == "approved" and before.get("state") == "pending_approval":
+            try:
+                launch_worker(cfg, operation_id)
+                message = "Approved. The resume worker is running."
+            except Exception as exc:  # noqa: BLE001 - dispatch boundary
+                db.update_agent_operation(
+                    conn,
+                    operation_id,
+                    state="failed",
+                    finished_at=db.utcnow(),
+                    error_code="DEPENDENCY_MISSING",
+                    error_message=f"Could not launch worker: {exc}"[:500],
+                )
+                db.append_agent_operation_event(conn, operation_id, "failed", {})
+                message = "Approved, but the worker could not start."
+        else:
+            message = "Operation is no longer awaiting approval."
+        return RedirectResponse(
+            f"/operations/{operation_id}?msg={_msg(message)}", status_code=303
+        )
+
+    @app.post("/operations/{operation_id}/deny")
+    def operation_deny(
+        operation_id: str, conn: sqlite3.Connection = Depends(get_conn)
+    ):
+        existing = db.get_agent_operation(conn, operation_id)
+        profile, _prefs = services.read_profile(cfg, conn)
+        if (
+            existing is None
+            or profile is None
+            or int(existing["profile_id"]) != int(profile.id or 0)
+        ):
+            raise HTTPException(status_code=404, detail="Operation not found")
+        with action_lock(cfg):
+            operation = db.deny_agent_operation(conn, operation_id)
+        message = "Denied." if operation and operation.get("state") == "denied" else "Operation is no longer awaiting approval."
+        return RedirectResponse(
+            f"/operations/{operation_id}?msg={_msg(message)}", status_code=303
+        )
+
+    @app.get("/artifacts/{application_id}/screenshot")
+    def artifact_screenshot(
+        application_id: int, conn: sqlite3.Connection = Depends(get_conn)
+    ):
+        profile, _prefs = services.read_profile(cfg, conn)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        application = db.get_application(conn, application_id)
+        if (
+            application is None
+            or int(application.profile_id or 0) != int(profile.id or 0)
+            or not application.screenshot_path
+        ):
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        path = Path(application.screenshot_path).resolve()
+        root = (Path(cfg.data_dir) / "screenshots").resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return FileResponse(path)
+
+    @app.get("/artifacts/{application_id}/resume")
+    def artifact_resume(
+        application_id: int, conn: sqlite3.Connection = Depends(get_conn)
+    ):
+        # Build the profile identity explicitly because this route has no
+        # Request parameter.
+        profile, _prefs = services.read_profile(cfg, conn)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        application = db.get_application(conn, application_id)
+        if (
+            application is None
+            or int(application.profile_id or 0) != int(profile.id or 0)
+            or not application.resume_path
+        ):
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        path = Path(application.resume_path).resolve()
+        root = Path(cfg.output_dir).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=f"jobforge-{application.job_id}-resume.pdf",
+        )
 
     @app.get("/profiles", response_class=HTMLResponse)
     def profiles(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
@@ -634,11 +1119,13 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/profiles/import")
+    @locked_write
     def import_profile(request: Request, file: UploadFile = File(...), conn: sqlite3.Connection = Depends(get_conn)):
         _import_profile_upload(cfg, conn, file)
         return RedirectResponse(f"/profiles?msg={_msg('Profile imported')}", status_code=303)
 
     @app.post("/profiles/{profile_id}/activate")
+    @locked_write
     def activate_profile(profile_id: int, conn: sqlite3.Connection = Depends(get_conn)):
         db.set_active_profile(conn, profile_id)
         return RedirectResponse("/profiles", status_code=303)
@@ -671,6 +1158,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/connections/github/connect")
+    @locked_write
     def github_connect(
         token: str = Form(""),
         conn: sqlite3.Connection = Depends(get_conn),
@@ -696,6 +1184,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
 
     @app.post("/connections/github/sync")
+    @locked_write
     def github_sync(conn: sqlite3.Connection = Depends(get_conn)):
         try:
             result = github_integration.sync_github(_github_store(cfg), conn)
@@ -716,6 +1205,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             )
 
     @app.post("/connections/github/disconnect")
+    @locked_write
     def github_disconnect(conn: sqlite3.Connection = Depends(get_conn)):
         github_integration.disconnect_github(_github_store(cfg), conn)
         return RedirectResponse(
@@ -805,6 +1295,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/connections/github/repos/{repo_id}/import")
+    @locked_write
     def github_repo_import(
         repo_id: int,
         title: str = Form(""),
@@ -817,7 +1308,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         repo = db.get_github_repo(conn, repo_id)
         if not repo:
             raise HTTPException(status_code=404, detail="GitHub repository not found")
-        profile, _ = services.ensure_profile(cfg, conn)
+        profile, _ = services.require_profile(cfg, conn)
         if not title.strip():
             return RedirectResponse(
                 f"/connections/github/repos/{repo_id}?msg={_msg('Project name is required.')}",
@@ -856,8 +1347,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/connections/github/repos/{repo_id}/remove")
+    @locked_write
     def github_repo_remove(repo_id: int, conn: sqlite3.Connection = Depends(get_conn)):
-        profile, _ = services.ensure_profile(cfg, conn)
+        profile, _ = services.require_profile(cfg, conn)
         removed = github_integration.remove_repo_project(profile, repo_id)
         if removed:
             db.save_profile(conn, profile)
@@ -868,6 +1360,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/connections/github/repos/{repo_id}/refresh")
+    @locked_write
     def github_repo_refresh(repo_id: int, conn: sqlite3.Connection = Depends(get_conn)):
         repo = db.get_github_repo(conn, repo_id)
         if not repo:
@@ -881,6 +1374,29 @@ def create_app(config: Config | None = None) -> FastAPI:
             f"/connections/github/repos/{repo_id}?msg={_msg(msg)}", status_code=303
         )
 
+    @app.post("/settings/features")
+    @locked_write
+    def save_feature_flags(
+        setup_wizard: str = Form(""),
+        github_connections: str = Form(""),
+        scoring_v2: str = Form(""),
+        agent: str = Form(""),
+        agent_integrations: str = Form(""),
+    ):
+        flags = FeatureFlags(
+            setup_wizard=bool(setup_wizard),
+            github_connections=bool(github_connections),
+            scoring_v2=bool(scoring_v2),
+            agent=bool(agent),
+            agent_integrations=bool(agent_integrations),
+        )
+        try:
+            _write_feature_config(cfg, flags)
+            msg = "Feature flags saved."
+        except (OSError, yaml.YAMLError, ValueError) as exc:
+            msg = f"Could not save feature flags: {exc}"
+        return RedirectResponse(f"/settings?msg={_msg(msg)}", status_code=303)
+
     @app.get("/settings/risk", response_class=HTMLResponse)
     def risk_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         ctx = context(request, conn)
@@ -891,6 +1407,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/settings/risk")
+    @locked_write
     def risk_update(
         request: Request,
         action: str = Form(...),
@@ -918,10 +1435,19 @@ def create_app(config: Config | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request=request,
             name="settings.html",
-            context={**ctx, "boards": boards, "llm_ready": cfg.llm.configured, "email_ready": cfg.email.enabled},
+            context={
+                **ctx,
+                "boards": boards,
+                "llm_ready": ctx["agent_ready"],
+                "email_ready": cfg.email.enabled,
+                "features": cfg.features,
+                "active_provider": ctx["active_provider"],
+                "active_model": ctx["active_model"],
+            },
         )
 
     @app.post("/settings")
+    @locked_write
     def save_settings(
         request: Request,
         titles: str = Form(""),
@@ -938,7 +1464,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         included_keywords: str = Form(""),
         conn: sqlite3.Connection = Depends(get_conn),
     ):
-        profile, _ = services.ensure_profile(cfg, conn)
+        profile, _ = services.require_profile(cfg, conn)
         prefs = _preferences_from_form(
             titles=titles,
             locations=locations,
@@ -964,6 +1490,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return templates.TemplateResponse(request=request, name="inbox.html", context={**ctx, "emails": rows})
 
     @app.post("/email/poll")
+    @locked_write
     def email_poll(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         try:
             from ..email.imap import poll
@@ -982,20 +1509,21 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.post("/export")
+    @locked_write
     def export(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         path = services.export_data(cfg, conn)
         return RedirectResponse(f"/settings?msg={_msg(f'Exported to {path}')}", status_code=303)
 
     @app.get("/api/jobs")
     def api_jobs(conn: sqlite3.Connection = Depends(get_conn)):
-        profile, prefs = services.ensure_profile(cfg, conn)
+        profile, prefs = services.require_profile(cfg, conn)
         return db.list_jobs(
             conn, profile.id, one_per_company=prefs.one_application_per_company, limit=500
         )
 
     @app.get("/api/status")
     def api_status(conn: sqlite3.Connection = Depends(get_conn)):
-        profile, _ = services.ensure_profile(cfg, conn)
+        profile, _ = services.require_profile(cfg, conn)
         return db.stats(conn, profile.id)
 
     @app.get("/healthz")

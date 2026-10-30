@@ -1,15 +1,20 @@
 """Opt-in risk policy with explicit disclosure.
 
-Every risky mode is **off by default**. The only high-risk mode this project
-implements is single-application unattended submit, capped per day. Captcha
-solving, bulk unattended submission, Indeed/LinkedIn automation, and employer
-account creation are deliberately unavailable; they are listed here so the UI
-and CLI can disclose that clearly instead of pretending they exist.
+Every risky mode is **off by default**. This project implements two bounded
+submission modes: single-application unattended submit and sequential autopilot
+submit from a queue. Both share one 10/day cap. Captcha solving, mass/parallel
+submission, Indeed/LinkedIn automation, and employer account creation remain
+deliberately unavailable; they are listed here so the UI and CLI can disclose
+that clearly instead of pretending they exist.
 """
 
 from __future__ import annotations
 
-import fcntl
+try:  # POSIX file locking; Windows uses msvcrt below.
+    import fcntl
+except ImportError:  # pragma: no cover - exercised on Windows
+    fcntl = None  # type: ignore[assignment]
+
 import json
 import os
 import tempfile
@@ -23,7 +28,7 @@ CONSENT_PHRASE = "I UNDERSTAND THE RISK"
 POLICY_FILE = "risk.json"
 USAGE_FILE = "risk_usage.json"
 
-AVAILABLE_FLAGS = {"unattended_submit"}
+AVAILABLE_FLAGS = {"unattended_submit", "autopilot_submit"}
 UNAVAILABLE_FLAGS = {
     "bulk_unattended",
     "captcha_solver",
@@ -40,9 +45,19 @@ WARNINGS = {
         "Captcha is never solved; a captcha stops the application and hands it back to you.\n"
         "Hard limit: {cap} unattended submissions per calendar day."
     ),
+    "autopilot_submit": (
+        "AUTOPILOT SUBMIT IS OFF BY DEFAULT.\n"
+        "Enabling it lets the scheduled queue prepare and submit ready applications "
+        "without a human review of each form.\n"
+        "Consequences you accept: unchecked applications can go out, employer/ATS "
+        "terms may be violated, and your accounts may be restricted.\n"
+        "Autopilot is sequential, uses an ATS allowlist and the quality gate, and "
+        "stops at captcha, 2FA, or an account wall.\n"
+        "Hard limit: {cap} total unattended + autopilot submissions per calendar day."
+    ),
     "bulk_unattended": (
-        "BULK UNATTENDED SUBMISSION IS NOT AVAILABLE. This tool submits at most one "
-        "application per explicit invocation and caps unattended submissions per day."
+        "MASS/PARALLEL UNATTENDED SUBMISSION IS NOT AVAILABLE. Autopilot submits "
+        "sequentially and shares a hard 10/day cap with single-application submit."
     ),
     "captcha_solver": (
         "CAPTCHA SOLVING IS NOT AVAILABLE. JobForge never solves, farms, or bypasses "
@@ -66,6 +81,7 @@ class RiskError(RuntimeError):
 @dataclass
 class RiskPolicy:
     unattended_submit: bool = False
+    autopilot_submit: bool = False
     daily_submit_cap: int = 10
     consented_at: str = ""
     consent_phrase: str = ""
@@ -82,6 +98,36 @@ def usage_path(config: Any) -> Path:
     return Path(config.data_dir) / USAGE_FILE
 
 
+def _lock_fd(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return
+    if os.name == "nt":  # pragma: no cover - Windows is a separate gate
+        import msvcrt
+
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"1")
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        return
+    raise RuntimeError("no reviewed file lock available for risk usage")
+
+
+def _unlock_fd(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+    if os.name == "nt":  # pragma: no cover - Windows is a separate gate
+        import msvcrt
+
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        return
+
+
 @contextmanager
 def _usage_lock(config: Any) -> Iterator[None]:
     """Serialize the daily-cap check and increment across processes."""
@@ -89,10 +135,10 @@ def _usage_lock(config: Any) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _lock_fd(fd)
         yield
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        _unlock_fd(fd)
         os.close(fd)
 
 
@@ -129,6 +175,7 @@ def load_policy(config: Any) -> RiskPolicy:
         cap = 10
     policy = RiskPolicy(
         unattended_submit=data.get("unattended_submit") is True,
+        autopilot_submit=data.get("autopilot_submit") is True,
         daily_submit_cap=cap,
         consented_at=str(data.get("consented_at", "")),
         consent_phrase=str(data.get("consent_phrase", "")),
@@ -137,6 +184,7 @@ def load_policy(config: Any) -> RiskPolicy:
     # A hand-edited boolean is not consent.
     if not policy.consented_at or policy.consent_phrase.strip() != CONSENT_PHRASE:
         policy.unattended_submit = False
+        policy.autopilot_submit = False
     return policy
 
 
@@ -170,7 +218,7 @@ def disable(config: Any, flag: str, *, conn: Any | None = None) -> RiskPolicy:
     policy = load_policy(config)
     if hasattr(policy, flag):
         setattr(policy, flag, False)
-    if flag == "unattended_submit":
+    if not (policy.unattended_submit or policy.autopilot_submit):
         policy.consent_phrase = ""
         policy.consented_at = ""
     save_policy(config, policy)
@@ -211,24 +259,32 @@ def record_submission(config: Any) -> dict[str, Any]:
         return usage
 
 
-def _check_unattended(config: Any) -> tuple[bool, str, RiskPolicy]:
+def _check_submit(config: Any, flag: str) -> tuple[bool, str, RiskPolicy]:
     policy = load_policy(config)
-    if not policy.unattended_submit:
+    if not bool(getattr(policy, flag, False)):
         return (
             False,
-            "Unattended submit is disabled. Enable it with: jobforge risk enable "
-            f'--flag unattended_submit --acknowledge "{CONSENT_PHRASE}"',
+            f"{flag.replace('_', ' ').capitalize()} is disabled. Enable it with: "
+            f'jobforge risk enable --flag {flag} --acknowledge "{CONSENT_PHRASE}"',
             policy,
         )
     usage = load_usage(config)
     if int(usage.get("count", 0)) >= policy.daily_submit_cap:
         return (
             False,
-            f"Daily unattended submit cap reached ({policy.daily_submit_cap}). "
-            "Wait until tomorrow or submit manually.",
+            f"Daily submit cap reached ({policy.daily_submit_cap}) across unattended "
+            "and autopilot modes. Wait until tomorrow or submit manually.",
             policy,
         )
     return True, "", policy
+
+
+def _check_unattended(config: Any) -> tuple[bool, str, RiskPolicy]:
+    return _check_submit(config, "unattended_submit")
+
+
+def _check_autopilot(config: Any) -> tuple[bool, str, RiskPolicy]:
+    return _check_submit(config, "autopilot_submit")
 
 
 def can_submit_unattended(config: Any) -> tuple[bool, str, RiskPolicy]:
@@ -238,13 +294,29 @@ def can_submit_unattended(config: Any) -> tuple[bool, str, RiskPolicy]:
 
 
 def reserve_submission(config: Any) -> tuple[bool, str, RiskPolicy]:
-    """Atomically check the policy and reserve one unattended-submit slot.
+    """Atomically check the policy and reserve one unattended-submit slot."""
+    return _reserve_submit(config, "unattended_submit")
+
+
+def can_submit_autopilot(config: Any) -> tuple[bool, str, RiskPolicy]:
+    """Read-only pre-check for autopilot. Does not reserve a daily slot."""
+    with _usage_lock(config):
+        return _check_autopilot(config)
+
+
+def reserve_autopilot_submission(config: Any) -> tuple[bool, str, RiskPolicy]:
+    """Atomically reserve one slot for a sequential autopilot submission."""
+    return _reserve_submit(config, "autopilot_submit")
+
+
+def _reserve_submit(config: Any, flag: str) -> tuple[bool, str, RiskPolicy]:
+    """Atomically check the policy and reserve one shared submission slot.
 
     The slot is consumed at attempt time, before the browser opens. A failed or
     captcha-blocked attempt still counts; under-counting would be unsafe.
     """
     with _usage_lock(config):
-        allowed, reason, policy = _check_unattended(config)
+        allowed, reason, policy = _check_submit(config, flag)
         if not allowed:
             return allowed, reason, policy
         usage = load_usage(config)

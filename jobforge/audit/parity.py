@@ -56,6 +56,11 @@ CHECKS: list[tuple[str, str, str]] = [
     ("Rate limiting", "jobforge/sources/base.py", "class RateLimiter"),
     ("Offline mode", "jobforge/db.py", "sqlite3"),
     ("GitHub repository context", "jobforge/integrations/github.py", "def connect_github"),
+    ("Agent runtime", "jobforge/agent/runtime.py", "class AgentRuntime"),
+    ("Model providers", "jobforge/agent/providers.py", "PROVIDERS"),
+    ("Candidate context", "jobforge/agent/context.py", "build_candidate_context"),
+    ("Agent thread persistence", "jobforge/db.py", "CREATE TABLE IF NOT EXISTS agent_threads"),
+    ("Agent chat UI", "jobforge/web/templates/agent.html", "agent-form"),
 ]
 
 

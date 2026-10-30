@@ -49,6 +49,76 @@
 
 <section class="panel">
   <div class="panel-head">
+    <h2>AI answer drafts</h2>
+    <span class="pill">human approval required</span>
+  </div>
+  <p class="muted">
+    Draft a free-text answer such as “Why this company?” from the job description and your
+    verified profile. The model only proposes text; it is not active until you approve it.
+    Sensitive or legally attestable questions are refused. Drafting sends the selected job
+    and profile facts to your configured model provider.
+  </p>
+  <form method="post" action="/answers/draft" class="stack">
+    <div class="row">
+      <label>Job ID
+        <input type="number" name="job_id" min="1" required placeholder="e.g. 4136">
+      </label>
+      <label>Question
+        <input name="question" maxlength="{{ max_key_chars }}" required placeholder="Why N1?">
+      </label>
+    </div>
+    <input type="hidden" name="category" value="motivation">
+    <div class="setup-actions">
+      <button class="primary">Draft with AI</button>
+      <span class="muted">A draft is saved for review; nothing is filled yet.</span>
+    </div>
+  </form>
+  {% if drafts %}
+  <div class="draft-list">
+    {% for draft in drafts %}
+    <article class="draft-card">
+      <div class="panel-head">
+        <div>
+          <strong>{{ draft.question }}</strong>
+          <p class="muted">{{ draft.company }}{% if draft.title %} · {{ draft.title }}{% endif %} · job {{ draft.job_id }} · {{ draft.created_at }}</p>
+        </div>
+        <span class="pill {{ 'bad' if draft.status == 'rejected' else '' }}">{{ draft.status }}</span>
+      </div>
+      {% if draft.status == 'draft' %}
+      <form method="post" action="/answers/drafts/{{ draft.id }}/approve" class="stack">
+        <label>Draft text
+          <textarea name="text" rows="5" maxlength="500" required>{{ draft.text }}</textarea>
+        </label>
+        <div class="setup-actions">
+          <button class="primary">Approve and save</button>
+        </div>
+      </form>
+      <form method="post" action="/answers/drafts/{{ draft.id }}/reject">
+        <button class="ghost">Reject draft</button>
+      </form>
+      {% else %}
+      <p class="draft-text">{{ draft.text }}</p>
+      {% endif %}
+      {% if draft.approved_key %}<p class="setup-note">Saved as answer key <code>{{ draft.approved_key }}</code>.</p>{% endif %}
+      {% if draft.basis %}
+      <details>
+        <summary class="muted">Verified facts used</summary>
+        <ul class="muted">
+          {% for fact in draft.basis %}<li>{{ fact.text }}</li>{% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+      {% if draft.warnings %}<p class="setup-note">{{ draft.warnings|join('; ') }}</p>{% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No AI drafts yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head">
     <h2>Built-in rule categories</h2>
     <span class="muted">from the active profile and preferences</span>
   </div>

@@ -1,0 +1,24 @@
+{
+  "name": "greenhouse_captcha",
+  "observation": {
+    "page_kind": "captcha",
+    "ats": "greenhouse",
+    "url": "https://example.com/greenhouse/apply",
+    "step": 0,
+    "fields": [],
+    "buttons": [],
+    "validation_errors": [],
+    "captcha": true,
+    "two_factor": false,
+    "account_wall": false,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "application_id": "176",
+    "attempt": 0,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "stop_captcha",
+    "rule": "captcha"
+  }
+}

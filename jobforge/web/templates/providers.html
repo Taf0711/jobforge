@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Models · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Model providers</p>
+    <h1>Models</h1>
+    <p class="muted">Optional for the Agent Skill/MCP workbench: the host agent uses its own model for chat and read-only tools. Configure a provider here only for JobForge's built-in agent and internal LLM generation. Keys are stored in the OS keychain or a local <code>0600</code> file, never in <code>config.yml</code>, SQLite, exports, or logs.</p>
+  </div>
+  <div class="actions">
+    {% if active_card and active_card.connected %}
+    <span class="pill">{{ active_card.spec.label }} · {{ active_model }}</span>
+    {% if not llm_enabled %}<span class="pill bad">disabled</span>{% endif %}
+    {% else %}
+    <span class="pill bad">no active provider</span>
+    {% endif %}
+    <a class="button" href="/agent">Open agent</a>
+  </div>
+</section>
+
+{% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>How this works</h2></div>
+  <div class="grid-2">
+    <div>
+      <p class="muted">ChatGPT and Claude consumer subscriptions are not API credentials. Use an OpenAI Platform key or a Claude Console key. Gemini uses a Google AI Studio key. OpenRouter supports an official OAuth sign-in. The Claude Code card is an experimental bridge to the official CLI: it uses your Claude Code sign-in, never reads its credential files, and is subject to Anthropic's terms.</p>
+      <p class="muted">Local providers need no key. The app never submits an application; the agent can prepare a resume and check readiness, then you review and click Submit.</p>
+    </div>
+    <div>
+      <p class="muted"><strong>Test chat</strong> sends a tiny billable request. <strong>Refresh models</strong> only asks the provider for its model list. <strong>Use this model</strong> writes the active selection to <code>config.yml</code> without a key.</p>
+      <p class="muted">Use Ollama or LM Studio if you want candidate context to stay on this machine.</p>
+    </div>
+  </div>
+</section>
+
+<section class="provider-grid">
+  {% for card in cards %}
+  <article class="panel provider-card {{ 'provider-active' if card.active else '' }}">
+    <div class="panel-head">
+      <div>
+        <h2>{{ card.spec.label }}</h2>
+        <p class="muted">{{ card.spec.kind }} · {{ card.spec.protocol }} protocol</p>
+      </div>
+      {% if card.connected %}
+      <span class="pill">connected · {{ card.backend }}</span>
+      {% elif card.spec.auth_mode == 'optional' %}
+      <span class="pill">optional key</span>
+      {% else %}
+      <span class="pill bad">not connected</span>
+      {% endif %}
+    </div>
+
+    {% if card.warning %}<p class="setup-note">{{ card.warning }}</p>{% endif %}
+    {% if card.connection and card.connection.meta and card.connection.meta.checked_at %}<p class="setup-note">Last checked {{ card.connection.meta.checked_at|short(19) }}</p>{% endif %}
+
+    {% if card.spec.supports_oauth %}
+    <div class="provider-actions">
+      <a class="button" href="/providers/oauth/openrouter/start">Sign in with OpenRouter</a>
+      <span class="muted">Official OAuth PKCE. Localhost callback.</span>
+    </div>
+    {% endif %}
+
+    {% if card.spec.auth_mode == 'cli' %}
+    <p class="setup-note"><strong>Experimental.</strong> JobForge runs the official <code>claude</code> CLI with tools disabled. It never reads <code>~/.claude/.credentials.json</code> or the Keychain. The run uses your Claude Code sign-in and is subject to Anthropic's terms. It is text-only: no JobForge tools, writes, queue changes, or submission. Candidate context is sent to Anthropic under your account.</p>
+    {% if card.cli %}
+    <p class="setup-note">CLI: {{ 'found' if card.cli.available else 'not found' }}{% if card.cli.version %} · {{ card.cli.version }}{% endif %} · auth: {{ card.cli.auth_method or 'signed out' }}</p>
+    {% if card.cli.auth_method == 'api_key' %}
+    <p class="setup-note">Claude Code is using an API key from the environment, not your Claude subscription. Unset <code>ANTHROPIC_API_KEY</code> (and any Anthropic auth helper) and run <code>claude auth login</code> for subscription usage.</p>
+    {% endif %}
+    {% endif %}
+    <form method="post" action="/providers/{{ card.spec.id }}/connect" class="stack provider-form">
+      <label>Model alias
+        <input name="model" list="models-{{ card.spec.id }}" value="{% if card.active_model %}{{ card.active_model }}{% elif card.models %}{{ card.models[0] }}{% endif %}" placeholder="sonnet, opus, haiku, or a full model ID">
+        <datalist id="models-{{ card.spec.id }}">
+          {% for model in card.models[:300] %}<option value="{{ model }}"></option>{% endfor %}
+        </datalist>
+      </label>
+      <div class="provider-actions">
+        <button class="primary">Check Claude Code sign-in</button>
+        <span class="muted">Run <code>claude auth login</code> first if signed out.</span>
+      </div>
+    </form>
+    {% else %}
+    <form method="post" action="/providers/{{ card.spec.id }}/connect" class="stack provider-form">
+      <label>API key
+        <input type="password" name="key" autocomplete="off" placeholder="{% if card.connected %}leave blank to keep the current key{% else %}paste a provider API key{% endif %}">
+      </label>
+      <label>Base URL
+        <input name="base_url" value="{{ card.base_url }}" placeholder="https://api.example.com/v1">
+      </label>
+      <label>Model
+        <input name="model" list="models-{{ card.spec.id }}" value="{% if card.active_model %}{{ card.active_model }}{% elif card.models %}{{ card.models[0] }}{% endif %}" placeholder="model id">
+        <datalist id="models-{{ card.spec.id }}">
+          {% for model in card.models[:300] %}<option value="{{ model }}"></option>{% endfor %}
+        </datalist>
+      </label>
+      <div class="provider-actions">
+        <button class="primary">{{ 'Replace key / save' if card.connected else 'Connect' }}</button>
+        {% if card.spec.key_url %}<a class="link" href="{{ card.spec.key_url }}" target="_blank" rel="noreferrer">Get a key</a>{% endif %}
+      </div>
+    </form>
+    {% endif %}
+
+    {% if card.connected %}
+    <form method="post" action="/providers/active" class="stack provider-form provider-activate">
+      <input type="hidden" name="provider_id" value="{{ card.spec.id }}">
+      <input type="hidden" name="base_url" value="{{ card.base_url }}">
+      <label>Make active
+        <input name="model" list="models-{{ card.spec.id }}" value="{% if card.active_model %}{{ card.active_model }}{% elif card.models %}{{ card.models[0] }}{% endif %}" placeholder="model id">
+      </label>
+      <button class="primary">Use this model</button>
+    </form>
+    <div class="provider-actions">
+      <form method="post" action="/providers/{{ card.spec.id }}/refresh" class="inline"><button>Refresh models</button></form>
+      <form method="post" action="/providers/{{ card.spec.id }}/test" class="inline"><button>Test chat</button></form>
+      <form method="post" action="/providers/{{ card.spec.id }}/disconnect" class="inline"><button class="ghost">Disconnect</button></form>
+    </div>
+    <p class="setup-note">Test chat may incur provider charges or use your Claude Code subscription. Disconnect removes stored metadata; it does not delete your profile or applications{% if card.spec.auth_mode == 'cli' %} or sign you out of Claude Code{% endif %}.</p>
+    {% endif %}
+
+    {% if card.spec.docs_url %}<p class="setup-note"><a href="{{ card.spec.docs_url }}" target="_blank" rel="noreferrer">Provider docs</a></p>{% endif %}
+  </article>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Where the context goes</h2></div>
+  <p class="muted">When you use the agent, the active provider receives the candidate context and the messages you type. The default context omits email and phone. Job descriptions are treated as untrusted input. Raw GitHub README text is not sent unless you imported it as an ordinary profile fact.</p>
+  <p class="muted">The Claude Code card does not read or store Claude Code credentials. It invokes the installed <code>claude</code> CLI, which authenticates itself. That provider is text-only and cannot call JobForge tools or submit applications.</p>
+  <p class="muted">Scanning, scoring, the quality gate, and browser filling do not call a provider. Resume tailoring uses the active provider when <code>tailoring.mode</code> is <code>auto</code> or <code>llm</code>; <code>deterministic</code> skips it, and <code>auto</code> falls back to the deterministic selector when no provider is available. Cover letters and AI answer drafts also use the provider when enabled.</p>
+  <p class="muted">The exported Agent Skill and MCP server do not need a JobForge provider for status, search, fit, readiness, profile, or application-summary reads. Their host agent supplies the model. A resume request still renders inside JobForge, so it uses the provider only when tailoring is configured to require one.</p>
+</section>
+{% endblock %}

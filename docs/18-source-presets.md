@@ -82,6 +82,10 @@ sources:
     enabled: false
   smartrecruiters:
     companies: []
+  github_jobs:
+    repos:
+      - SimplifyJobs/New-Grad-Positions
+      - SimplifyJobs/Summer2026-Internships
 ```
 
 ## Notes
@@ -102,6 +106,11 @@ sources:
   not verification; open the posting before tailoring.
 - USAJobs is dormant until `USAJOBS_API_KEY` and `USAJOBS_EMAIL` are exported.
   NYC Open Data is keyless. Both insert canonical public-sector links.
-- Aggregator feeds (SimplifyJobs, Jobright) and HN Who-is-Hiring are deliberately
-  **not** inserted: they are discovery links without a canonical application
-  URL. JobForge's quality gate expects an employer/public-sector apply URL.
+- Aggregator destinations are never used as the apply URL. The GitHub job-list
+  source reads public tables from repos such as SimplifyJobs, but imports only
+  rows that contain a direct employer/ATS link; rows with only a Simplify,
+  Jobright, LinkedIn, or Indeed link are skipped. HN Who-is-Hiring is not
+  imported because it lacks a canonical employer URL.
+- GitHub job-list rows are lead-only: the README has no full JD, so they usually
+  score below full ATS postings. Open the employer posting before tailoring.
+  See `docs/22-github-job-lists.md`.

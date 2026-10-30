@@ -17,6 +17,8 @@ sources:
     boards: []         # e.g. [seedlegals]
   smartrecruiters:
     companies: []      # e.g. [Ubisoft]
+  github_jobs:
+    repos: []          # e.g. [SimplifyJobs/New-Grad-Positions]
   workday:
     boards: []         # e.g. ["acme|wd1|External"] or a myworkdayjobs.com board URL
   nyc_opendata:
@@ -55,16 +57,47 @@ preferences:
   min_match: 55
   one_application_per_company: true
 
+# Local feature flags. All default to true; env vars override individual flags.
+#   JOBFORGE_FEATURE_SETUP_WIZARD=0
+#   JOBFORGE_FEATURE_GITHUB_CONNECTIONS=0
+#   JOBFORGE_FEATURE_SCORING_V2=0
+#   JOBFORGE_FEATURE_AGENT=0
+#   JOBFORGE_FEATURE_AGENT_INTEGRATIONS=0
+features:
+  setup_wizard: true
+  github_connections: true
+  scoring_v2: true
+  agent: true
+  agent_integrations: true
+
 # GitHub is connected from the dashboard (Connections). It is intentionally
 # absent here. Set GITHUB_TOKEN or JOBFORGE_GITHUB_TOKEN to avoid storing a copy.
 
+# Model providers are connected from the dashboard (Models). API keys are
+# stored in the OS keychain or a local 0600 file, never in this file. Set
+# JOBFORGE_LLM_PROVIDER / MODEL / BASE_URL to override at startup.
 llm:
   enabled: false
+  provider: ollama
   base_url: "http://localhost:11434/v1"
-  api_key: ""
   model: "llama3.1:8b"
   timeout: 120
   temperature: 0.2
+  max_tokens: 4096
+
+# Resume tailoring. auto uses the LLM when a provider is available and falls
+# back to the deterministic selector; llm requires a provider; deterministic
+# skips the LLM entirely. Automated grounding checks (not semantic proof) still gate output.
+tailoring:
+  mode: auto
+
+# The agent is read/write-gated per message. Writes are enabled only when the
+# user checks "Allow actions" for that message.
+agent:
+  max_steps: 8
+  max_seconds: 300
+  max_tool_calls: 6
+  allow_writes: false
 
 email:
   enabled: false

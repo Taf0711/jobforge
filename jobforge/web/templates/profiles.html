@@ -66,7 +66,7 @@
       {% if p.dead %}<span class="pill bad">excluded</span>{% endif %}
       {% if p.tech_line %}<span class="muted"> · {{ p.tech_line }}</span>{% endif %}
       {% if p.url %}<a class="link" href="{{ p.url }}" target="_blank" rel="noopener">repo</a>{% endif %}
-      {% if p.repo_id and github_connected %}<a class="link" href="/connections/github/repos/{{ p.repo_id }}">edit</a>{% endif %}
+      {% if p.repo_id and github_connected and features.github_connections %}<a class="link" href="/connections/github/repos/{{ p.repo_id }}">edit</a>{% endif %}
       {% if p.bullets %}<ul>{% for b in p.bullets %}<li>{{ b }}</li>{% endfor %}</ul>{% else %}<p class="muted">No bullets yet; add context from the GitHub review page.</p>{% endif %}
     </div>
   {% endfor %}

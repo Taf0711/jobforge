@@ -39,6 +39,8 @@ rows and skips `Not Started` rows unless `--include-unstarted` is passed.
 | `network.yml` | `data/network.yml`, converted to JobForge's relationship/strength schema |
 | `role_archetypes.yml` | `data/role_archetypes.yml`; tailoring uses the detected archetype's `strongest_projects` priority |
 | `applications.yml` | jobs + application rows with mapped statuses |
+| `programs`, `verified_quantifiers`, `sensitive_wording`, `resume_style_rules`, `scoring_inputs` | `Profile.context` for the agent and advisor; never rendered automatically |
+| `evidence_matrix.yml` (full) | `Profile.evidence` incl. levels, evidence items, and skill-to-proof links |
 
 ## Application status mapping
 
@@ -52,7 +54,10 @@ rows and skips `Not Started` rows unless `--include-unstarted` is passed.
 | `Withdrawn` | `withdrawn` |
 
 The original stage, channel, email, notes, and resume-forge id are kept in the
-application notes.
+application notes. Imported tracker rows are historical: `db.list_jobs` keeps
+them out of the live feed and queue by default so they cannot masquerade as new
+high-fit opportunities. They remain addressable by id and by an explicit
+`source='resume-forge'` filter.
 
 ## Project selection and one-page output
 
@@ -109,6 +114,15 @@ The JD parser and scorer now use the resume-forge gate model for:
 
 The resulting **Pursuit** score is Fit + compensation + location. Fit is never
 rewritten by those modifiers.
+
+## Agent context
+
+The importer now preserves the full evidence matrix on `Profile.evidence` and
+the non-rendered resume-forge context on `Profile.context`: programs (including
+explicit resume exclusions), verified quantifiers, sensitive wording rules,
+resume style rules, scoring inputs, preferences, and authorization. The agent
+uses those fields to explain strengths, gaps, project proof, and application
+history. Contact email/phone are redacted from the default agent context.
 
 ## Not yet imported
 

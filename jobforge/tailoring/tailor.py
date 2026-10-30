@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -19,6 +20,7 @@ from ..matching.jd import JD, parse_jd
 from ..matching.skills import GRAPH_PATH, SkillGraph, extract_skills
 from .ats_check import ats_check
 from .llm import COVER_LETTER_SYSTEM, GROUNDING_SYSTEM, LLMClient
+from .llm_resume import generate_llm_resume
 
 TEMPLATE = Path(__file__).with_name("template.typ")
 COMPACT_TEMPLATE = Path(__file__).with_name("template_compact.typ")
@@ -41,6 +43,9 @@ class TailorResult:
     selected_fact_ids: list[str] = field(default_factory=list)
     summary: str = ""
     warnings: list[str] = field(default_factory=list)
+    llm_used: bool = False
+    llm_model: str = ""
+    mode: str = "auto"
 
 
 def _keywords(text: str) -> set[str]:
@@ -361,9 +366,10 @@ def build_data(
         header.append({"text": "U.S. Citizen", "url": ""})
 
     experience = []
-    # resume-forge keeps the base resume to three experience entries; later
-    # entries (for example a mentorship) stay in the profile but off the page.
-    for entry in profile.experience[:3]:
+    # Keep the four most recent roles. Later entries (for example a
+    # mentorship) stay in the profile but off the page; adaptive trimming
+    # below removes bullets if the four entries still overflow one page.
+    for entry in profile.experience[:4]:
         key = (str(entry.get("title", "")), str(entry.get("company", "")), "experience")
         bullets = [f["text"] for f in selected_by_entry.get(key, [])]
         if not bullets:
@@ -554,6 +560,50 @@ def _output_dir_name(job: Job) -> str:
     return "-".join(part for part in (base, location, ident) if part)
 
 
+def _output_dir_for(profile: Profile, job: Job, output_root: str | Path) -> Path:
+    """Return a profile-scoped, job-scoped artifact directory.
+
+    Job ids are global, but the same job can be tailored for more than one
+    profile. The profile segment keeps one profile from overwriting another
+    profile's resume at the same stable path.
+    """
+    ident = f"profile-{profile.id}" if profile.id is not None else "profile-unsaved"
+    return Path(output_root) / ident / slugify(job.company) / _output_dir_name(job)
+
+
+def _trim_render_data(
+    data: dict[str, Any],
+    *,
+    experience_bullets: int,
+    project_bullets: int,
+    max_projects: int,
+    max_groups: int,
+    items_per_group: int,
+) -> dict[str, Any]:
+    """Return a verified-content subset that is more likely to fit one page.
+
+    This only removes already-selected bullets/skills from the rendered view.
+    It never adds, rewrites, or reattributes a fact.
+    """
+    trimmed = copy.deepcopy(data)
+    trimmed["experience"] = [
+        {**entry, "bullets": list(entry.get("bullets") or [])[:experience_bullets]}
+        for entry in (trimmed.get("experience") or [])[:4]
+    ]
+    trimmed["projects"] = [
+        {**entry, "bullets": list(entry.get("bullets") or [])[:project_bullets]}
+        for entry in (trimmed.get("projects") or [])[:max_projects]
+    ]
+    groups = []
+    for group in (trimmed.get("skill_groups") or [])[:max_groups]:
+        items = list(group.get("items") or [])[:items_per_group]
+        if items:
+            groups.append({**group, "items": items})
+    trimmed["skill_groups"] = groups
+    trimmed["skills"] = [item for group in groups for item in group["items"]]
+    return trimmed
+
+
 def tailor_resume(
     profile: Profile,
     job: Job,
@@ -562,6 +612,7 @@ def tailor_resume(
     llm: LLMClient | None = None,
     write_cover_letter: bool = True,
     archetypes: dict[str, dict[str, Any]] | None = None,
+    mode: str = "auto",
 ) -> TailorResult:
     missing = [
         field
@@ -576,8 +627,34 @@ def tailor_resume(
         raise ValueError(f"Profile is missing required contact fields: {', '.join(missing)}")
     jd = parse_jd(job.description or job.title, title_hint=job.title, company_hint=job.company, location_hint=job.location)
     selected, fact_ids = select_facts(profile, jd, max_per_entry=4)
-    data = build_data(profile, jd, selected, summary="", archetypes=archetypes)
-    out_dir = Path(output_root) / slugify(job.company) / _output_dir_name(job)
+    baseline = build_data(profile, jd, selected, summary="", archetypes=archetypes)
+    data = baseline
+    mode = (mode or "auto").strip().lower()
+    llm_used = False
+    llm_source_ids: list[str] = []
+    llm_warnings: list[str] = []
+    llm_model = str(getattr(llm, "model", "") or "")
+    if mode != "deterministic":
+        if llm is None or not llm.available:
+            if mode == "llm":
+                raise ValueError(
+                    "LLM tailoring is required but no model provider is available. "
+                    "Connect a provider or set tailoring.mode to auto/deterministic."
+                )
+        else:
+            outcome = generate_llm_resume(
+                profile, job, jd, llm, baseline, archetypes=archetypes
+            )
+            llm_warnings = outcome.warnings
+            if outcome.data is not None:
+                data = outcome.data
+                llm_used = True
+                llm_source_ids = outcome.source_ids
+            elif mode == "llm":
+                detail = "; ".join(outcome.warnings) or (outcome.error or "unknown error")
+                raise ValueError(f"LLM tailoring failed: {detail}")
+    source_ids = llm_source_ids if llm_source_ids else fact_ids
+    out_dir = _output_dir_for(profile, job, output_root)
     pdf_path, typ_path, data_path = render(data, out_dir, template=TEMPLATE)
     ats = ats_check(pdf_path)
     if ats.get("pages", 0) > 1:
@@ -585,6 +662,39 @@ def tailor_resume(
         # enough to preserve the one-page requirement.
         pdf_path, typ_path, data_path = render(data, out_dir, template=COMPACT_TEMPLATE)
         ats = ats_check(pdf_path)
+    if ats.get("pages", 0) > 1:
+        # If the compact layout is still too tall, remove only already-selected
+        # content in progressively tighter steps. Never synthesize a replacement
+        # bullet or skill. The first candidate usually fits a full profile.
+        for attempt in (
+            (3, 3, 2, 4, 6),
+            (3, 2, 2, 4, 6),
+            (2, 2, 2, 3, 6),
+            (2, 2, 2, 3, 5),
+            (2, 1, 1, 2, 5),
+            (1, 1, 1, 2, 4),
+        ):
+            candidate = _trim_render_data(
+                data,
+                experience_bullets=attempt[0],
+                project_bullets=attempt[1],
+                max_projects=attempt[2],
+                max_groups=attempt[3],
+                items_per_group=attempt[4],
+            )
+            candidate_pdf, candidate_typ, candidate_data = render(
+                candidate, out_dir, template=COMPACT_TEMPLATE
+            )
+            candidate_ats = ats_check(candidate_pdf)
+            if candidate_ats.get("pages", 0) <= 1:
+                data = candidate
+                pdf_path, typ_path, data_path = (
+                    candidate_pdf,
+                    candidate_typ,
+                    candidate_data,
+                )
+                ats = candidate_ats
+                break
 
     cover_path = ""
     if write_cover_letter:
@@ -601,7 +711,7 @@ def tailor_resume(
         doc.close()
         cover_path = str(cover_pdf)
 
-    warnings = list(ats.get("warnings", []))
+    warnings = list(llm_warnings) + list(ats.get("warnings", []))
     if not profile.facts:
         warnings.append("No fact bank found; bullets were copied from the parsed resume without selection")
     return TailorResult(
@@ -610,7 +720,10 @@ def tailor_resume(
         data_path=str(data_path),
         cover_letter_path=cover_path,
         ats=ats,
-        selected_fact_ids=fact_ids,
-        summary="",
+        selected_fact_ids=source_ids,
+        summary=str(data.get("summary") or ""),
         warnings=warnings,
+        llm_used=llm_used,
+        llm_model=llm_model if llm_used else "",
+        mode=mode,
     )

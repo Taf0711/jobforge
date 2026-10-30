@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <title>{% block title %}JobForge{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -13,12 +14,16 @@
       <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">Dashboard</a>
       <a href="/jobs" class="{{ 'active' if request.url.path.startswith('/jobs') else '' }}">Jobs</a>
       <a href="/applications" class="{{ 'active' if request.url.path.startswith('/applications') else '' }}">Applications</a>
+      {% if features.agent_integrations %}<a href="/operations" class="{{ 'active' if request.url.path.startswith('/operations') else '' }}">Operations</a>{% endif %}
       <a href="/queue" class="{{ 'active' if request.url.path.startswith('/queue') else '' }}">Queue</a>
+      <a href="/autopilot" class="{{ 'active' if request.url.path.startswith('/autopilot') else '' }}">Autopilot</a>
+      {% if features.agent %}<a href="/agent" class="{{ 'active' if request.url.path.startswith('/agent') else '' }}">Agent</a>{% endif %}
       <a href="/answers" class="{{ 'active' if request.url.path.startswith('/answers') else '' }}">Answers</a>
       <a href="/inbox" class="{{ 'active' if request.url.path.startswith('/inbox') else '' }}">Inbox</a>
       <a href="/profiles" class="{{ 'active' if request.url.path.startswith('/profiles') else '' }}">Profiles</a>
-      <a href="/connections" class="{{ 'active' if request.url.path.startswith('/connections') else '' }}">Connections</a>
-      <a href="/setup" class="{{ 'active' if request.url.path.startswith('/setup') else '' }}">Setup</a>
+      {% if features.github_connections %}<a href="/connections" class="{{ 'active' if request.url.path.startswith('/connections') else '' }}">Connections</a>{% endif %}
+      {% if features.agent %}<a href="/providers" class="{{ 'active' if request.url.path.startswith('/providers') else '' }}">Models</a>{% endif %}
+      {% if features.setup_wizard %}<a href="/setup" class="{{ 'active' if request.url.path.startswith('/setup') else '' }}">Setup</a>{% endif %}
       <a href="/settings" class="{{ 'active' if request.url.path.startswith('/settings') else '' }}">Settings</a>
       <a href="/runs" class="{{ 'active' if request.url.path.startswith('/runs') else '' }}">Runs</a>
     </nav>
@@ -35,8 +40,9 @@
   </main>
 
   <footer>
-    Local-first. No account, no telemetry. Applications are filled by a browser you control; you click Submit.
+    Local-first. No account, no telemetry. The agent can prepare and fill, but you click Submit.
   </footer>
   <script src="/static/app.js"></script>
+  <script src="/static/selection-ask.js" defer></script>
 </body>
 </html>

@@ -12,6 +12,14 @@
     }, 6500);
   }
 
+  // Submit status forms without inline handlers (the dashboard CSP blocks
+  // inline script). A noscript button remains as the non-JS fallback.
+  document.querySelectorAll("select[data-autosubmit]").forEach(function (select) {
+    select.addEventListener("change", function () {
+      if (select.form) select.form.submit();
+    });
+  });
+
   // Confirm destructive/irreversible actions.
   document.querySelectorAll('form[action$="/hide"]').forEach(function (form) {
     form.addEventListener("submit", function (event) {

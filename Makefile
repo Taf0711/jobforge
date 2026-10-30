@@ -64,6 +64,12 @@ audit:
 eval:
 	$(PY) -m jobforge.audit.adapter_eval --all --json
 
+decisions:
+	$(PY) -m jobforge decisions replay
+
+decision-compare:
+	$(PY) -m jobforge decisions compare --json
+
 e2e:
 	$(PY) scripts/e2e_smoke.py --json
 

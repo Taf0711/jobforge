@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Autopilot · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Sequential autopilot</p>
+    <h1>Autopilot</h1>
+    <p class="muted">Scan, score, tailor, prepare, and — only when explicitly enabled — submit ready applications one at a time. Captcha, 2FA, or an account wall stops the run.</p>
+  </div>
+  <div class="actions">
+    <a class="button" href="/queue">Queue</a>
+    <a class="button" href="/settings/risk">Risk settings</a>
+  </div>
+</section>
+
+{% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+
+<section class="panel" id="autopilot-live" data-endpoint="/api/autopilot/status">
+  <div class="panel-head">
+    <h2>Live trace</h2>
+    <span id="ap-status-pill" class="pill">checking…</span>
+  </div>
+  <p class="muted" id="ap-stage">No autopilot state yet.</p>
+  <p class="muted" id="ap-job"></p>
+  <div class="ap-counters">
+    <span>Prepared <strong id="ap-prepared">0</strong></span>
+    <span>Submitted <strong id="ap-submitted">0</strong></span>
+    <span>Skipped <strong id="ap-skipped">0</strong></span>
+    <span>Failed <strong id="ap-failed">0</strong></span>
+  </div>
+  <ol id="ap-trace" class="ap-trace"></ol>
+  <p class="setup-note" id="ap-updated"></p>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Autopilot submit</h2>
+      <span class="pill {{ 'bad' if risk.policy['autopilot_submit'] else '' }}">
+        {{ 'ENABLED' if risk.policy['autopilot_submit'] else 'OFF (default)' }}
+      </span>
+    </div>
+    <p class="muted">Autopilot is sequential. It uses only Greenhouse, Lever, Ashby, Workable, and SmartRecruiters. Workday account creation, Indeed, and LinkedIn are excluded.</p>
+    <p class="muted">Shared usage today: <strong>{{ risk.usage.count }}</strong> / {{ risk.policy.daily_submit_cap }} (with unattended submit).</p>
+    {% if not risk.policy['autopilot_submit'] %}
+    <p class="setup-note"><strong>Submissions are off.</strong> Dry runs can prepare applications, but live submission requires the explicit <code>autopilot_submit</code> consent on <a href="/settings/risk">Risk settings</a>.</p>
+    {% elif not can_submit %}
+    <p class="setup-note">{{ submit_reason }}</p>
+    {% endif %}
+    <pre class="jd" style="max-height:220px">{{ risk.warnings['autopilot_submit'] }}</pre>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Queue</h2><span class="pill">{{ queue_summary.total }} items</span></div>
+    <ul class="setup-list">
+      <li><strong>Pending</strong><br><span class="muted">{{ queue_summary.pending }} waiting for tailoring.</span></li>
+      <li><strong>Prepared</strong><br><span class="muted">{{ queue_summary.prepared }} ready for review or submission.</span></li>
+      <li><strong>Submitted</strong><br><span class="muted">{{ queue_summary.submitted }} completed.</span></li>
+      <li><strong>Skipped / failed</strong><br><span class="muted">{{ queue_summary.skipped }} skipped · {{ queue_summary.failed }} failed.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Run a pass</h2><span class="pill">hard max 10</span></div>
+  <form method="post" action="/autopilot/run" class="stack">
+    <div class="row">
+      <label>Jobs this pass <input type="number" name="limit" value="5" min="1" max="10"></label>
+      <label>Minimum match <input type="number" name="min_score" min="0" max="100" placeholder="preferences default"></label>
+    </div>
+    <div>
+      <label class="check"><input type="checkbox" name="scan" value="1"> Scan configured sources first</label>
+      <label class="check"><input type="checkbox" name="score" value="1"> Rescore stored jobs first</label>
+    </div>
+    {% if queue_summary.prepared %}
+    <p class="setup-note"><strong>{{ queue_summary.prepared }} prepared application(s).</strong> A live run will submit them after the risk and quality gates; a dry run will not.</p>
+    {% endif %}
+    <div class="setup-actions">
+      <button name="mode" value="dry">Dry run — no submission</button>
+      <button class="primary" name="mode" value="live" {% if not risk.policy['autopilot_submit'] %}disabled title="Enable autopilot_submit in Risk settings first"{% endif %}>Start live autopilot</button>
+      <span class="muted">Runs in a separate process. Refresh for the digest.</span>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Last digest</h2><span class="muted">local only</span></div>
+  {% if digest %}
+  <ul class="setup-list">
+    <li><strong>{{ digest.finished_at or digest.started_at or 'unknown time' }}</strong><br>
+      <span class="muted">{{ digest.submitted }} submitted · {{ digest.prepared }} prepared · {{ digest.skipped }} skipped · {{ digest.failed }} failed{% if digest.dry_run %} · dry run{% endif %}</span></li>
+    {% if digest.stopped_reason %}<li><strong>Stopped</strong><br><span class="muted">{{ digest.stopped_reason }}</span></li>{% endif %}
+    <li><strong>ATS allowlist</strong><br><span class="muted">{{ digest.ats|join(', ') if digest.ats else 'none' }}</span></li>
+  </ul>
+  {% else %}
+  <p class="muted">No autopilot pass has run yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>What stays manual</h2></div>
+  <ul class="muted">
+    <li>Workday account creation and multi-page employer accounts.</li>
+    <li>Indeed and LinkedIn applications.</li>
+    <li>Captcha, 2FA, email verification, and account walls.</li>
+    <li>Anything the quality gate or automated grounding checks block.</li>
+    <li>Final judgment on unusual roles; use the Queue for review.</li>
+  </ul>
+</section>
+<script src="/static/autopilot.js" defer></script>
+{% endblock %}

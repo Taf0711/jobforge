@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -62,6 +64,28 @@ def _seed(cfg: Config, tmp_path: Path) -> tuple[int, int]:
     )
     conn.close()
     return profile_id, job_id
+
+
+def test_risk_module_imports_without_fcntl():
+    code = """
+import builtins
+real_import = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if name == "fcntl":
+        raise ImportError("fcntl unavailable")
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = blocked
+import jobforge.risk
+print("ok")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parent.parent,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
 
 
 def test_default_is_off_and_warning_is_direct(tmp_path: Path):
@@ -279,3 +303,50 @@ def test_risk_page_defaults_off_and_enables_with_phrase(tmp_path: Path):
     assert good.status_code == 200
     assert risk.load_policy(cfg).unattended_submit is True
     assert "ENABLED" in client.get("/settings/risk").text
+
+
+def test_autopilot_submit_is_available_but_off_and_shares_cap(tmp_path: Path):
+    cfg = _config(tmp_path)
+    policy = risk.load_policy(cfg)
+    assert policy.autopilot_submit is False
+    assert "autopilot_submit" in risk.status(cfg)["available"]
+
+    allowed, reason, _policy = risk.reserve_autopilot_submission(cfg)
+    assert allowed is False
+    assert "disabled" in reason.lower()
+
+    risk.enable(cfg, "unattended_submit", risk.CONSENT_PHRASE)
+    policy = risk.enable(cfg, "autopilot_submit", risk.CONSENT_PHRASE)
+    policy.daily_submit_cap = 1
+    risk.save_policy(cfg, policy)
+    assert risk.load_policy(cfg).autopilot_submit is True
+
+    allowed, _reason, _policy = risk.reserve_autopilot_submission(cfg)
+    assert allowed is True
+    assert risk.load_usage(cfg)["count"] == 1
+
+    allowed, reason, _policy = risk.reserve_submission(cfg)
+    assert allowed is False
+    assert "cap" in reason.lower()
+
+
+def test_hand_edited_autopilot_flag_without_consent_stays_off(tmp_path: Path):
+    cfg = _config(tmp_path)
+    (cfg.data_dir / "risk.json").write_text(
+        '{"autopilot_submit": true}', encoding="utf-8"
+    )
+    assert risk.load_policy(cfg).autopilot_submit is False
+
+
+def test_autopilot_and_unattended_keep_separate_consent_until_both_off(tmp_path: Path):
+    cfg = _config(tmp_path)
+    risk.enable(cfg, "unattended_submit", risk.CONSENT_PHRASE)
+    risk.enable(cfg, "autopilot_submit", risk.CONSENT_PHRASE)
+    risk.disable(cfg, "unattended_submit")
+    policy = risk.load_policy(cfg)
+    assert policy.autopilot_submit is True
+    assert policy.consented_at
+    risk.disable(cfg, "autopilot_submit")
+    policy = risk.load_policy(cfg)
+    assert policy.consented_at == ""
+    assert policy.consent_phrase == ""

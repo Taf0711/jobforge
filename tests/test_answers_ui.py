@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from jobforge import db
 from jobforge.config import BrowserConfig, Config, EmailConfig, LLMConfig, ServerConfig
+from jobforge.models import Profile
 from jobforge.web.answers_routes import answers_path, create_answers_router
 
 
@@ -29,6 +30,10 @@ def _config(tmp_path: Path) -> Config:
     )
     cfg.ensure_dirs()
     db.init_db(cfg.db_path)
+    conn = db.connect(cfg.db_path)
+    profile_id = db.save_profile(conn, Profile(name="answers-test"))
+    db.set_active_profile(conn, profile_id)
+    conn.close()
     return cfg
 
 
@@ -192,3 +197,53 @@ def test_malformed_answers_file_reads_as_empty(tmp_path: Path):
     client, cfg = _client(tmp_path)
     answers_path(cfg).write_text("{broken", encoding="utf-8")
     assert client.get("/api/answers").json() == {}
+
+
+def test_answers_page_renders_ai_draft_form(tmp_path: Path):
+    client, _ = _client(tmp_path)
+    response = client.get("/answers")
+    assert response.status_code == 200
+    assert "AI answer drafts" in response.text
+    assert "Draft with AI" in response.text
+    assert "human approval required" in response.text
+
+
+def test_draft_and_approval_routes_redirect(monkeypatch, tmp_path: Path):
+    from types import SimpleNamespace
+
+    client, _ = _client(tmp_path)
+    monkeypatch.setattr(
+        "jobforge.web.answers_routes.draft_answer",
+        lambda *args, **kwargs: SimpleNamespace(id="draft-1"),
+    )
+    monkeypatch.setattr(
+        "jobforge.web.answers_routes.approve_draft",
+        lambda *args, **kwargs: SimpleNamespace(id="draft-1", status="approved"),
+    )
+    monkeypatch.setattr(
+        "jobforge.web.answers_routes.reject_draft",
+        lambda *args, **kwargs: SimpleNamespace(id="draft-1", status="rejected"),
+    )
+
+    response = client.post(
+        "/answers/draft",
+        data={"job_id": "1", "question": "Why N1?", "category": "motivation"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "Draft%20generated" in response.headers["location"]
+
+    response = client.post(
+        "/answers/drafts/draft-1/approve",
+        data={"text": "Approved answer."},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "Draft%20approved" in response.headers["location"]
+
+    response = client.post(
+        "/answers/drafts/draft-1/reject",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert "Draft%20rejected" in response.headers["location"]

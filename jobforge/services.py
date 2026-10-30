@@ -24,6 +24,7 @@ from .models import (
     slugify,
     utcnow,
 )
+from .locking import locked_action
 from .paths import base_dir
 from .sources.base import SourceError
 from .sources.direct import fetch_job_url
@@ -75,6 +76,54 @@ def _seed_preferences(config: Config) -> Preferences:
     return Preferences.from_dict(data)
 
 
+class SetupRequired(RuntimeError):
+    """A read-only query was made before a human initialized the workbench."""
+
+
+def read_profile(
+    config: Config, conn: sqlite3.Connection
+) -> tuple[Profile | None, Preferences | None]:
+    """Read the active profile without creating or repairing any rows.
+
+    Read-only callers must use this instead of ``ensure_profile``. A missing
+    profile returns ``(None, None)``; missing preferences return defaults
+    without persisting them.
+    """
+    profile = db.get_active_profile(conn)
+    if profile is None:
+        return None, None
+    prefs = db.get_preferences(conn, profile.id or 0)
+    return profile, prefs or Preferences()
+
+
+def require_profile(
+    config: Config, conn: sqlite3.Connection
+) -> tuple[Profile, Preferences]:
+    """Return the active profile or raise ``SetupRequired``."""
+    profile, prefs = read_profile(config, conn)
+    if profile is None or prefs is None:
+        raise SetupRequired("JobForge setup is incomplete; run `jobforge setup` first")
+    return profile, prefs
+
+
+def require_profile_by_id(
+    conn: sqlite3.Connection, profile_id: int
+) -> tuple[Profile, Preferences]:
+    """Resolve an explicit profile for a queued or approved action.
+
+    Execution paths must use the profile recorded when the work was approved,
+    not whichever profile happens to be active later. This helper never changes
+    the active profile.
+    """
+    profile = db.get_profile(conn, profile_id)
+    if profile is None:
+        raise SetupRequired(
+            "The profile for this approved action no longer exists; recreate it or deny the action"
+        )
+    prefs = db.get_preferences(conn, profile.id or 0)
+    return profile, prefs
+
+
 def ensure_profile(config: Config, conn: sqlite3.Connection) -> tuple[Profile, Preferences]:
     profile = db.get_active_profile(conn)
     if profile is None:
@@ -96,6 +145,7 @@ def ensure_profile(config: Config, conn: sqlite3.Connection) -> tuple[Profile, P
     return profile, prefs
 
 
+@locked_action
 def refresh_profile_from_resume(config: Config, conn: sqlite3.Connection, path: str | Path) -> Profile:
     profile, _ = ensure_profile(config, conn)
     parsed = profile_from_resume(path)
@@ -107,6 +157,7 @@ def refresh_profile_from_resume(config: Config, conn: sqlite3.Connection, path: 
     return merged
 
 
+@locked_action
 def scan(
     config: Config,
     conn: sqlite3.Connection,
@@ -178,13 +229,20 @@ def scan(
     return stats
 
 
+@locked_action
 def rescore(
     config: Config, conn: sqlite3.Connection, *, only_unscored: bool = False
 ) -> dict[str, Any]:
-    profile, prefs = ensure_profile(config, conn)
+    profile, prefs = require_profile(config, conn)
     run_id = db.start_run(conn, "score")
     try:
-        result = score_all(conn, profile, prefs, only_unscored=only_unscored)
+        result = score_all(
+            conn,
+            profile,
+            prefs,
+            only_unscored=only_unscored,
+            scoring_v2=config.features.scoring_v2,
+        )
         db.finish_run(conn, run_id, RunStatus.OK.value, result)
         return result
     except Exception as exc:
@@ -192,38 +250,89 @@ def rescore(
         raise
 
 
-def tailor_job(config: Config, conn: sqlite3.Connection, job_id: int) -> dict[str, Any]:
+_PROTECTED_APPLICATION_STATUSES = frozenset(
+    {
+        ApplicationStatus.SUBMITTED.value,
+        ApplicationStatus.INTERVIEW.value,
+        ApplicationStatus.OFFER.value,
+        ApplicationStatus.REJECTED.value,
+        ApplicationStatus.WITHDRAWN.value,
+    }
+)
+_PROTECTED_EVENT_KINDS = ("applied", "submitted", "unattended_submit", "autopilot_submit")
+
+
+def _protected_application_reason(
+    conn: sqlite3.Connection, existing: sqlite3.Row | None
+) -> str:
+    """Return a refusal reason when an application has a prior submission.
+
+    A protected row must not reach an LLM call or the renderer: output paths are
+    stable, so a late refusal can still replace the bytes that were sent.
+    """
+    if existing is None:
+        return ""
+    status = str(existing["status"] or "")
+    if status in _PROTECTED_APPLICATION_STATUSES:
+        return f"Application is already {status}"
+    if existing["submitted_at"]:
+        return "Application has a submitted_at timestamp"
+    placeholders = ",".join("?" for _ in _PROTECTED_EVENT_KINDS)
+    prior = conn.execute(
+        f"SELECT 1 FROM events WHERE application_id=? AND kind IN ({placeholders}) LIMIT 1",
+        (int(existing["id"]), *_PROTECTED_EVENT_KINDS),
+    ).fetchone()
+    if prior is not None:
+        return "Application has a prior submission event"
+    return ""
+
+
+@locked_action
+def tailor_job(
+    config: Config,
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    profile_id: int | None = None,
+) -> dict[str, Any]:
     job = db.get_job(conn, job_id)
     if not job:
         raise ValueError(f"Job {job_id} not found")
-    profile, prefs = ensure_profile(config, conn)
+    if profile_id is None:
+        profile, prefs = require_profile(config, conn)
+    else:
+        profile, prefs = require_profile_by_id(conn, profile_id)
     resume_path = profile.resume_path or (str(config.resume_path) if config.resume_path else "")
     if not resume_path or not Path(resume_path).exists():
         raise ValueError("No base resume found. Set profile.resume_path or config.resume.")
     profile.resume_path = resume_path
-    llm = LLMClient(config.llm)
+
+    existing = conn.execute(
+        "SELECT * FROM applications WHERE job_id=? AND profile_id=?",
+        (job.id, profile.id),
+    ).fetchone()
+    protected_reason = _protected_application_reason(conn, existing)
+    if protected_reason:
+        raise ValueError(
+            f"{protected_reason}; refusing to replace the resume that was sent. "
+            "Tailor a new application only after reopening it."
+        )
+
+    llm = LLMClient(config)
     run_id = db.start_run(conn, "tailor")
     try:
         result = tailor_resume(
-            profile, job, config.output_dir, llm=llm, archetypes=load_archetypes(config)
+            profile,
+            job,
+            config.output_dir,
+            llm=llm,
+            archetypes=load_archetypes(config),
+            mode=config.tailoring.mode,
         )
         if not result.ats.get("ok"):
             errors = "; ".join(result.ats.get("errors") or ["unknown ATS failure"])
             raise ValueError(f"Tailored PDF failed ATS checks: {errors}")
 
-        existing = conn.execute(
-            "SELECT * FROM applications WHERE job_id=? AND profile_id=?",
-            (job.id, profile.id),
-        ).fetchone()
-        if existing and str(existing["status"]) in {
-            ApplicationStatus.SUBMITTED.value,
-            ApplicationStatus.INTERVIEW.value,
-            ApplicationStatus.OFFER.value,
-        }:
-            raise ValueError(
-                f"Application is already {existing['status']}; refusing to replace the "
-                "resume that was sent. Tailor a new application only after reopening it."
-            )
         if existing:
             app_id = int(existing["id"])
             db.update_application(
@@ -255,6 +364,9 @@ def tailor_job(config: Config, conn: sqlite3.Connection, job_id: int) -> dict[st
             "ats": result.ats,
             "facts": len(result.selected_fact_ids),
             "warnings": result.warnings,
+            "llm_used": result.llm_used,
+            "llm_model": result.llm_model,
+            "mode": result.mode,
             "reused_application": bool(existing),
         }
         db.finish_run(conn, run_id, RunStatus.OK.value, stats)
@@ -264,6 +376,7 @@ def tailor_job(config: Config, conn: sqlite3.Connection, job_id: int) -> dict[st
         raise
 
 
+@locked_action
 def apply_job(
     config: Config,
     conn: sqlite3.Connection,
@@ -272,13 +385,19 @@ def apply_job(
     allow_submit: bool = False,
     hold_seconds: int = 0,
     resume_path: str | None = None,
+    submission_mode: str = "unattended",
+    review_only: bool = False,
+    profile_id: int | None = None,
 ) -> dict[str, Any]:
     from .automation.base import run_application
 
     job = db.get_job(conn, job_id)
     if not job:
         raise ValueError(f"Job {job_id} not found")
-    profile, prefs = ensure_profile(config, conn)
+    if profile_id is None:
+        profile, prefs = require_profile(config, conn)
+    else:
+        profile, prefs = require_profile_by_id(conn, profile_id)
     existing = conn.execute(
         "SELECT * FROM applications WHERE job_id=? AND profile_id=?", (job_id, profile.id)
     ).fetchone()
@@ -299,18 +418,28 @@ def apply_job(
     if not gate.ready:
         raise quality.QualityBlocked(gate)
 
-    auto_submit = bool(allow_submit or config.browser.allow_submit)
+    if review_only and allow_submit:
+        raise ValueError("review_only cannot be combined with allow_submit")
+    if review_only and submission_mode == "autopilot":
+        raise ValueError("review_only is not valid for autopilot submission")
+    auto_submit = False if review_only else bool(allow_submit or config.browser.allow_submit)
     if auto_submit:
-        from .risk import reserve_submission
+        from .risk import RiskError, reserve_autopilot_submission, reserve_submission
 
-        allowed, reason, _policy = reserve_submission(config)
+        reserve = (
+            reserve_autopilot_submission
+            if submission_mode == "autopilot"
+            else reserve_submission
+        )
+        allowed, reason, _policy = reserve(config)
         if not allowed:
-            from .risk import RiskError
-
             raise RiskError(reason)
 
     run_id = db.start_run(conn, "apply")
     try:
+        from .automation.decision_shadow import shadow_enabled, shadow_path
+
+        decision_shadow = shadow_path(config) if shadow_enabled() else None
         cover_letter = str(existing["cover_letter_path"] or "") if existing else ""
         report = run_application(
             job,
@@ -322,8 +451,14 @@ def apply_job(
             answer_bank_path=config.data_dir / "answers.json",
             allow_submit=auto_submit,
             submission_authorized=auto_submit,
+            review_only=review_only,
             hold_seconds=hold_seconds,
+            non_interactive=submission_mode == "autopilot",
             screenshot_dir=config.data_dir / "screenshots",
+            decision_shadow_path=decision_shadow,
+            decision_run_id=run_id,
+            decision_job_id=job.id,
+            decision_application_id=str(existing["id"]) if existing else "",
         )
         status = ApplicationStatus.SUBMITTED.value if report.submitted else ApplicationStatus.PREPARED.value
         if report.captcha and not report.submitted:
@@ -345,7 +480,8 @@ def apply_job(
         app_id = db.create_application(conn, app)
         db.log_event(conn, app_id, "applied" if report.submitted else "prepared", report.url)
         if auto_submit and report.submitted:
-            db.log_event(conn, app_id, "unattended_submit", "risk-consented submission")
+            event = "autopilot_submit" if submission_mode == "autopilot" else "unattended_submit"
+            db.log_event(conn, app_id, event, "risk-consented submission")
         stats = {"application_id": app_id, **report.to_dict()}
         db.finish_run(conn, run_id, RunStatus.OK.value, {"application_id": app_id, "submitted": report.submitted})
         return stats
@@ -354,12 +490,20 @@ def apply_job(
         raise
 
 
-def launch_apply_subprocess(config: Config, job_id: int, hold_seconds: int = 600) -> int:
+def launch_apply_subprocess(
+    config: Config,
+    job_id: int,
+    hold_seconds: int = 600,
+    *,
+    review_only: bool = False,
+) -> int:
     """Start the headed apply flow in a separate process (used by the web UI)."""
     cmd = [sys.executable, "-m", "jobforge"]
     if config.config_path:
         cmd.extend(["--config", str(config.config_path)])
     cmd.extend(["apply", "--job", str(job_id), "--hold", str(hold_seconds)])
+    if review_only:
+        cmd.append("--review-only")
     proc = subprocess.Popen(
         cmd,
         cwd=str(base_dir()),
@@ -446,9 +590,12 @@ def job_context(
     graph = load_network(config)
     warm = warm_summary(graph, job.company, fit) if graph else None
 
+    application = dict(app) if app else None
+    if application is not None:
+        application["answers"] = json.loads(application.get("answers_json") or "{}")
     return {
         "job": asdict(job),
         "match": asdict(match) if match else None,
-        "application": dict(app) if app else None,
+        "application": application,
         "warm": warm,
     }

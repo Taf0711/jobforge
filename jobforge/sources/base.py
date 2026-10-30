@@ -179,9 +179,34 @@ def _to_int(value: str) -> int | None:
 
 
 def is_remote(location: str, description: str = "", flag: bool | None = None) -> bool:
-    if flag:
+    """Return whether the *role* is remote, not whether the company is remote-first.
+
+    A company blurb saying "remote-friendly" must not turn an onsite San
+    Francisco role into a remote match. Trust an explicit source flag; otherwise
+    require a remote marker in the location, or fall back to the description only
+    when the location is missing/ambiguous.
+    """
+    if flag is True:
         return True
-    haystack = f"{location} {description[:2000]}".lower()
+    loc = (location or "").strip().lower()
+    remote_markers = ("remote", "work from home", "distributed", "anywhere", "worldwide", "global")
+    if any(token in loc for token in remote_markers):
+        return True
+    if flag is False:
+        return False
+    haystack = description[:2500].lower()
+    # Role-level remote language can override a city in the location field.
+    if re.search(
+        r"(?:this|the)\s+(?:role|position|job)\s+(?:is|will be|can be)\s+"
+        r"(?:fully\s+)?(?:remote|work from home|distributed)|"
+        r"(?:remote|hybrid)[- ]friendly|fully remote|remote (?:role|position|opportunity)|"
+        r"open to remote|remote within",
+        haystack,
+    ):
+        return True
+    ambiguous = {"", "hybrid", "onsite", "on-site", "office", "n/a", "multiple locations", "various"}
+    if loc not in ambiguous:
+        return False
     return any(token in haystack for token in ("remote", "work from home", "distributed"))
 
 

@@ -125,3 +125,20 @@ def test_normal_override_still_wins(tmp_path: Path):
 
     assert answer.value == "1 month"
     assert answer.category == "override"
+
+
+def test_resume_forge_work_auth_keys_are_honored():
+    profile = Profile(
+        work_auth={"work_authorized_us": True, "sponsorship_needed": False}
+    )
+    bank = AnswerBank()
+    authorized = bank.answer(
+        "Are you authorized to work in the United States?", profile, Preferences()
+    )
+    sponsorship = bank.answer(
+        "Will you require sponsorship?", profile, Preferences()
+    )
+    assert authorized.value == "Yes"
+    assert authorized.category == "work_authorization"
+    assert sponsorship.value == "No"
+    assert sponsorship.category == "sponsorship"

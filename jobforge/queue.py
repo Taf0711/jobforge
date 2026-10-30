@@ -11,13 +11,15 @@ import json
 import os
 import sqlite3
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
 from . import db, quality, services
 from .config import Config
-from .models import Preferences, Profile, utcnow
+from .locking import action_lock_path
+from .models import ApplicationStatus, Preferences, Profile, utcnow
 
 QUEUE_STATUSES = ("pending", "prepared", "submitted", "skipped", "failed")
 VALID_STATUSES = frozenset(QUEUE_STATUSES)
@@ -84,6 +86,24 @@ class Queue:
         self._items: list[QueueItem] = []
         self._load()
 
+    # Cross-process coordination
+
+    @contextmanager
+    def _locked(self):
+        """Hold the shared action lock and reload the queue under it.
+
+        A Queue object cached before another process wrote the file must not
+        overwrite that work with stale in-memory items. Every mutation reloads
+        first, then saves atomically.
+        """
+        with action_lock_path(self.path.parent / "action.lock"):
+            self._reload()
+            yield
+
+    def _reload(self) -> None:
+        self._items = []
+        self._load()
+
     # ------------------------------------------------------------------
     # Reading
     # ------------------------------------------------------------------
@@ -113,7 +133,11 @@ class Queue:
     # Building
     # ------------------------------------------------------------------
 
-    def build(
+    def build(self, *args, **kwargs) -> list[QueueItem]:
+        with self._locked():
+            return self._build_locked(*args, **kwargs)
+
+    def _build_locked(
         self,
         conn: sqlite3.Connection,
         profile: Profile,
@@ -190,34 +214,38 @@ class Queue:
     # Transitions
     # ------------------------------------------------------------------
 
-    def mark_prepared(self, job_id: int, resume_path: str) -> QueueItem:
+    def mark_prepared(self, job_id: int, resume_path: str, note: str = "") -> QueueItem:
         return self._transition(
             job_id,
             "prepared",
             resume_path=str(resume_path or ""),
             error="",
-            note="",
+            note=note,
         )
 
     def mark_submitted(self, job_id: int) -> QueueItem:
         return self._transition(job_id, "submitted", error="", note="")
 
-    def mark_skipped(self, job_id: int) -> QueueItem:
-        return self._transition(job_id, "skipped", error="", note="")
+    def mark_skipped(self, job_id: int, note: str = "") -> QueueItem:
+        return self._transition(job_id, "skipped", error="", note=note)
 
-    def mark_failed(self, job_id: int, error: str) -> QueueItem:
+    def mark_failed(self, job_id: int, error: str, note: str = "") -> QueueItem:
         return self._transition(
             job_id,
             "failed",
             error=str(error) if error is not None else "",
-            note="",
+            note=note,
         )
 
     # ------------------------------------------------------------------
     # Supervised actions
     # ------------------------------------------------------------------
 
-    def prepare_next(self, config: Config, conn: sqlite3.Connection) -> QueueItem:
+    def prepare_next(self, *args, **kwargs) -> QueueItem:
+        with self._locked():
+            return self._prepare_next_locked(*args, **kwargs)
+
+    def _prepare_next_locked(self, config: Config, conn: sqlite3.Connection) -> QueueItem:
         """Tailor the first pending item and mark it prepared.
 
         Failures are recorded on the item as ``failed`` and returned; they are
@@ -227,7 +255,9 @@ class Queue:
         if item is None:
             raise LookupError("No pending queue items to prepare")
         try:
-            result = services.tailor_job(config, conn, item.job_id)
+            result = services.tailor_job(
+                config, conn, item.job_id, profile_id=item.profile_id
+            )
             pdf_path = str(result.get("pdf") or "").strip() if isinstance(result, dict) else ""
             if not pdf_path:
                 raise ValueError("tailor_job did not return a PDF path")
@@ -240,7 +270,7 @@ class Queue:
         # before opening a browser if a blocker remains.
         job = db.get_job(conn, item.job_id)
         if job is not None:
-            profile, prefs = services.ensure_profile(config, conn)
+            profile, prefs = services.require_profile_by_id(conn, item.profile_id)
             report = quality.evaluate(conn, job, profile, prefs)
             if not report.ready:
                 blocked = "; ".join(
@@ -251,7 +281,11 @@ class Queue:
                 )
         return prepared
 
-    def apply_next(
+    def apply_next(self, *args, **kwargs) -> QueueItem:
+        with self._locked():
+            return self._apply_next_locked(*args, **kwargs)
+
+    def _apply_next_locked(
         self,
         config: Config,
         conn: sqlite3.Connection,
@@ -259,6 +293,7 @@ class Queue:
         hold_seconds: int = 0,
         confirm: Callable[[], bool] | None = None,
         auto_submit: bool = False,
+        submission_mode: str = "unattended",
     ) -> QueueItem:
         """Open the first prepared item's application for human review.
 
@@ -275,15 +310,20 @@ class Queue:
         job = db.get_job(conn, item.job_id)
         if job is None:
             return self.mark_failed(item.job_id, "Job not found")
-        profile, prefs = services.ensure_profile(config, conn)
+        profile, prefs = services.require_profile_by_id(conn, item.profile_id)
         report = quality.evaluate(conn, job, profile, prefs, require_prepared=False)
         if not report.ready:
             raise quality.QualityBlocked(report)
 
         if auto_submit:
-            from .risk import RiskError, can_submit_unattended
+            from .risk import RiskError, can_submit_autopilot, can_submit_unattended
 
-            allowed, reason, _policy = can_submit_unattended(config)
+            check = (
+                can_submit_autopilot
+                if submission_mode == "autopilot"
+                else can_submit_unattended
+            )
+            allowed, reason, _policy = check(config)
             if not allowed:
                 raise RiskError(reason)
             run_config = config
@@ -293,8 +333,15 @@ class Queue:
         kwargs: dict[str, Any] = {"hold_seconds": hold_seconds}
         if auto_submit:
             kwargs["allow_submit"] = True  # security-audit: allow auto-submit enabled
+            if submission_mode == "autopilot":
+                kwargs["submission_mode"] = "autopilot"
+        else:
+            # Explicit final policy: never inherit browser.allow_submit.
+            kwargs["review_only"] = True
         try:
-            report = services.apply_job(run_config, conn, item.job_id, **kwargs)
+            report = services.apply_job(
+                run_config, conn, item.job_id, profile_id=item.profile_id, **kwargs
+            )
         except Exception as exc:
             return self.mark_failed(item.job_id, str(exc))
 
@@ -307,6 +354,9 @@ class Queue:
                 item.job_id, f"apply_job returned a malformed submitted value: {submitted!r}"
             )
         if submitted is True:
+            self._mark_application_submitted(
+                conn, item, note="submission reported by apply_job"
+            )
             return self._transition(
                 item.job_id,
                 "submitted",
@@ -324,6 +374,9 @@ class Queue:
                     note=f"confirmation prompt failed: {exc}",
                 )
             if confirmed:
+                self._mark_application_submitted(
+                    conn, item, note="human confirmed submission"
+                )
                 return self._transition(
                     item.job_id,
                     "submitted",
@@ -351,6 +404,26 @@ class Queue:
     # Internals
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _mark_application_submitted(
+        conn: sqlite3.Connection, item: QueueItem, *, note: str
+    ) -> None:
+        """Keep the queue and the application tracker in the same state."""
+        row = conn.execute(
+            "SELECT id FROM applications WHERE job_id=? AND profile_id=?",
+            (item.job_id, item.profile_id),
+        ).fetchone()
+        if row is None:
+            return
+        app_id = int(row["id"])
+        db.update_application(
+            conn,
+            app_id,
+            status=ApplicationStatus.SUBMITTED.value,
+            submitted_at=utcnow(),
+        )
+        db.log_event(conn, app_id, "submitted", note)
+
     def _first(self, status: str) -> QueueItem | None:
         return next((item for item in self._items if item.status == status), None)
 
@@ -360,7 +433,11 @@ class Queue:
                 return item
         raise LookupError(f"Queue item for job {job_id} not found")
 
-    def _transition(
+    def _transition(self, *args, **kwargs) -> QueueItem:
+        with self._locked():
+            return self._transition_locked(*args, **kwargs)
+
+    def _transition_locked(
         self,
         job_id: int,
         status: str,

@@ -20,6 +20,25 @@
   <div class="stat"><span>{{ stats.applications.get('interview', 0) }}</span><small>interviews</small></div>
 </section>
 
+{% if features.agent %}
+<section class="panel agent-cta">
+  <div>
+    <p class="eyebrow">Career agent</p>
+    <h2>Ask across your whole search</h2>
+    <p class="muted">Compare matches, explain gaps, find the proof behind a skill, check a warm path, or tailor and review readiness. The agent uses your verified facts and never submits.</p>
+  </div>
+  <div class="actions">
+    {% if agent_ready %}
+    <a class="button primary" href="/agent">Open agent</a>
+    <a class="link" href="/providers">Change model</a>
+    {% else %}
+    <a class="button primary" href="/providers">Connect a model</a>
+    <a class="link" href="/agent">Preview agent</a>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="panel-head">
     <h2>Best matches</h2>
@@ -46,6 +65,29 @@
   <p class="empty">No jobs yet. <a href="/setup">Finish setup</a> or add boards in Settings, then run a scan.</p>
   {% endif %}
 </section>
+
+{% if github_lead_jobs %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>Community GitHub leads</h2>
+    <a class="link" href="/jobs?source=github_jobs&min_score=0">Review all {{ github_lead_count }}</a>
+  </div>
+  <p class="muted">Discovery leads from public job-list repos. The README has no full JD, so these score below full ATS postings until you open the employer page.</p>
+  <table>
+    <tbody>
+    {% for job in github_lead_jobs %}
+      <tr>
+        <td><span class="score weak">{{ '%.0f'|format(job.score or 0) }}</span></td>
+        <td>{{ job.company }}</td>
+        <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
+        <td class="muted">{{ job.location or ('Remote' if job.remote else '') }}</td>
+        <td class="muted">{{ job.posted_at[:10] if job.posted_at else '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
 
 <section class="grid-2">
   <div class="panel">

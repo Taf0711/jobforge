@@ -10,3 +10,6 @@ playwright>=1.64
 keyring>=25
 pytest>=8.0
 httpx>=0.27
+
+# Optional MCP adapter (also available as the [agent] extra).
+mcp==2.3.0

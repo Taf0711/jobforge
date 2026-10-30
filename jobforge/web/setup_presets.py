@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-ATS_KEYS = ("greenhouse", "lever", "ashby", "workable", "workday", "smartrecruiters")
+ATS_KEYS = ("greenhouse", "lever", "ashby", "workable", "workday", "smartrecruiters", "github_jobs")
 PUBLIC_KEYS = ("nyc_opendata", "usajobs")
 
 PRESETS: dict[str, dict[str, Any]] = {
@@ -70,6 +70,16 @@ PRESETS: dict[str, dict[str, Any]] = {
             "usajobs": {"keyword": "software engineer", "limit": 50, "enabled": True},
         },
     },
+    "github_lists": {
+        "label": "Community GitHub job lists",
+        "description": "SimplifyJobs new-grad and internship lists. Rows with only an aggregator link are skipped; direct employer/ATS links are kept.",
+        "sources": {
+            "github_jobs": [
+                "SimplifyJobs/New-Grad-Positions",
+                "SimplifyJobs/Summer2026-Internships",
+            ],
+        },
+    },
 }
 
 
@@ -77,7 +87,7 @@ def configured_boards(cfg: Any, name: str) -> list[str]:
     section = (cfg.sources or {}).get(name) or {}
     if not isinstance(section, dict):
         return []
-    values = section.get("boards") or section.get("companies") or []
+    values = section.get("boards") or section.get("companies") or section.get("repos") or []
     return [str(value) for value in values if str(value).strip()]
 
 
@@ -127,7 +137,10 @@ def _preset_values(keys: Iterable[str] | None = None) -> dict[str, set[str]]:
 
 
 def custom_boards(cfg: Any) -> dict[str, str]:
-    preset_values = _preset_values(selected_presets(cfg))
+    # A board is custom only if it belongs to no preset. Using the currently
+    # selected presets would turn boards from a previously selected mix into
+    # "custom" and silently keep them when the user switches to Minimal.
+    preset_values = _preset_values()
     result: dict[str, str] = {}
     for source in ATS_KEYS:
         custom = [
@@ -170,9 +183,32 @@ def build_sources(
         values = list(dict.fromkeys(merged[source]))
         if not values:
             continue
-        key = "companies" if source == "smartrecruiters" else "boards"
+        key = "companies" if source == "smartrecruiters" else ("repos" if source == "github_jobs" else "boards")
         result[source] = {key: values}
     result.update(public)
+    return result
+
+
+def merge_sources(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    """Merge custom boards into an existing source map without dropping it."""
+    result: dict[str, Any] = {}
+    for source in ATS_KEYS:
+        key = "companies" if source == "smartrecruiters" else ("repos" if source == "github_jobs" else "boards")
+        base_values = list((base.get(source) or {}).get(key) or [])
+        extra_values = list((extra.get(source) or {}).get(key) or [])
+        merged = [
+            value
+            for value in dict.fromkeys(
+                [str(item) for item in [*base_values, *extra_values] if str(item).strip()]
+            )
+        ]
+        if merged:
+            result[source] = {key: merged}
+    for source in PUBLIC_KEYS:
+        if isinstance(extra.get(source), dict):
+            result[source] = dict(extra[source])
+        elif isinstance(base.get(source), dict):
+            result[source] = dict(base[source])
     return result
 
 
@@ -182,7 +218,7 @@ def source_board_count(sources: dict[str, Any]) -> int:
         section = sources.get(source)
         if not isinstance(section, dict):
             continue
-        values = section.get("boards") or section.get("companies") or []
+        values = section.get("boards") or section.get("companies") or section.get("repos") or []
         count += len([value for value in values if str(value).strip()])
     for source in PUBLIC_KEYS:
         section = sources.get(source)

@@ -83,8 +83,13 @@ def test_resume_forge_layout_data_contract():
     assert data["education"][0]["end"] == "June 2026"
     assert len(data["education"][0]["courses"]) == 8
 
-    # The base resume keeps three experience entries.
-    assert [entry["company"] for entry in data["experience"]] == ["Company 0", "Company 1", "Company 2"]
+    # The tailoring path keeps the four most recent experience entries.
+    assert [entry["company"] for entry in data["experience"]] == [
+        "Company 0",
+        "Company 1",
+        "Company 2",
+        "Company 3",
+    ]
 
     # Dead projects are excluded; at most three live projects; tech line/URL survive.
     names = [project["name"] for project in data["projects"]]

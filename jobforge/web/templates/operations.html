@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head"><h1>Operations</h1><span class="pill">human approval</span></div>
+  <p class="muted">Resume requests created by local agents. Nothing is generated until you approve it here. Approval runs the deterministic/LLM tailoring path; it never submits an application.</p>
+  {% if operations %}
+  <table class="compact">
+    <thead><tr><th>Job</th><th>Action</th><th>State</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+      {% for item in operations %}
+      <tr>
+        <td>{% if item.job %}{{ item.job.company }} · {{ item.job.title }}{% else %}Job #{{ item.operation.payload.job_id }}{% endif %}</td>
+        <td>{{ item.operation.action }}</td>
+        <td><span class="pill">{{ item.operation.state }}</span></td>
+        <td class="muted">{{ item.operation.created_at }}</td>
+        <td><a href="/operations/{{ item.operation.id }}">Review</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No agent operations yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

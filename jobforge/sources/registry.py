@@ -8,6 +8,7 @@ from ..models import Job
 from .ashby import AshbySource
 from .base import JobSource, SourceError
 from .direct import fetch_job_url
+from .github_jobs import GitHubJobsSource
 from .greenhouse import GreenhouseSource
 from .lever import LeverSource
 from .nyc import NYCOpenDataSource
@@ -25,6 +26,7 @@ SOURCES: dict[str, JobSource] = {
     "workday": WorkdaySource(),
     "nyc_opendata": NYCOpenDataSource(),
     "usajobs": USAJobsSource(),
+    "github_jobs": GitHubJobsSource(),
 }
 
 # Sources configured as one section object, not a list of board slugs.
@@ -48,7 +50,7 @@ def configured_boards(config: Config, name: str) -> list[str]:
     section = config.sources.get(name) or {}
     if not isinstance(section, dict):
         return []
-    boards = section.get("boards") or section.get("companies") or []
+    boards = section.get("boards") or section.get("companies") or section.get("repos") or []
     return [str(b) for b in boards if str(b).strip()]
 
 

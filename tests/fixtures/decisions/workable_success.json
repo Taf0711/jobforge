@@ -1,0 +1,24 @@
+{
+  "name": "workable_success",
+  "observation": {
+    "page_kind": "success",
+    "ats": "workable",
+    "url": "https://example.com/workable/apply",
+    "step": 0,
+    "fields": [],
+    "buttons": [],
+    "validation_errors": [],
+    "captcha": false,
+    "two_factor": false,
+    "account_wall": false,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "application_id": "176",
+    "attempt": 0,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "done",
+    "rule": "success_page"
+  }
+}

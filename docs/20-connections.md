@@ -101,6 +101,20 @@ into the profile stay there; the user can keep or edit them after reconnecting.
 - **CSRF and access token.** Existing Origin checks and the optional
   `server.access_token` gate cover the connection routes like every other write.
 
+## GitHub job lists are a different feature
+
+The **Connections → GitHub** flow imports your own repositories as resume
+projects. It does not add jobs. To use public job-list repos such as SimplifyJobs,
+configure `sources.github_jobs.repos` or choose the **Community GitHub job
+lists** setup preset; see `docs/22-github-job-lists.md`.
+
+## Feature flag
+
+The whole surface is gated by `features.github_connections` (default on). Turn
+it off in **Settings → Feature flags**, `config.yml`, or
+`JOBFORGE_FEATURE_GITHUB_CONNECTIONS=0` to hide the page, routes, and project-edit
+links. Existing connection data and imported projects are kept.
+
 ## Limitations
 
 - Only repositories owned by the authenticated account are listed. Organization

@@ -12,10 +12,14 @@ from jobforge.models import Application, Job, Preferences, Profile
 from jobforge.tailoring.ats_check import ats_check
 from jobforge.tailoring.tailor import (
     TailorResult,
+    _output_dir_for,
     _output_dir_name,
     _supported,
+    _trim_render_data,
+    build_data,
     cover_letter,
     summarize,
+    tailor_resume,
 )
 
 
@@ -82,6 +86,105 @@ def test_output_dir_name_is_unique_for_same_company_and_title():
     assert _output_dir_name(first) != _output_dir_name(second)
     assert _output_dir_name(first).endswith("-1")
     assert _output_dir_name(second).endswith("-2")
+
+
+def test_artifact_directory_is_scoped_by_profile():
+    job = Job(
+        id=7,
+        source="lever",
+        source_id="7",
+        company="Acme",
+        title="Software Engineer",
+        location="Remote",
+    )
+    first = Profile(id=1, name="first")
+    second = Profile(id=2, name="second")
+
+    first_dir = _output_dir_for(first, job, "/tmp/output")
+    second_dir = _output_dir_for(second, job, "/tmp/output")
+
+    assert first_dir != second_dir
+    assert "profile-1" in first_dir.parts
+    assert "profile-2" in second_dir.parts
+
+
+def test_tailor_resume_writes_separate_artifacts_per_profile(
+    tmp_path: Path, monkeypatch
+):
+    from jobforge.tailoring import tailor as tailor_module
+
+    seen: list[Path] = []
+
+    def fake_render(data, out_dir, template=None):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        seen.append(out_dir)
+        pdf = out_dir / "resume.pdf"
+        typ = out_dir / "resume.typ"
+        payload = out_dir / "resume.json"
+        for path in (pdf, typ, payload):
+            path.write_text("x", encoding="utf-8")
+        return pdf, typ, payload
+
+    monkeypatch.setattr(tailor_module, "render", fake_render)
+    monkeypatch.setattr(
+        tailor_module, "ats_check", lambda path: {"ok": True, "pages": 1}
+    )
+    job = Job(
+        id=9,
+        source="lever",
+        source_id="9",
+        company="Acme",
+        title="Software Engineer",
+        description="Requirements:\n- Python",
+    )
+
+    for profile_id, name in ((1, "First"), (2, "Second")):
+        profile = Profile(
+            id=profile_id,
+            name=name,
+            first_name=name,
+            last_name="Candidate",
+            email=f"{name.lower()}@example.com",
+            phone="+1 555 0100",
+            skills=["Python"],
+            facts=[
+                {
+                    "id": f"fact-{profile_id}",
+                    "section": "experience",
+                    "text": "Built Python services.",
+                    "skills": ["Python"],
+                }
+            ],
+        )
+        tailor_resume(profile, job, tmp_path, write_cover_letter=False)
+
+    assert len(seen) == 2
+    assert seen[0] != seen[1]
+    assert "profile-1" in seen[0].parts
+    assert "profile-2" in seen[1].parts
+
+
+def test_trim_render_data_deep_copies_without_error():
+    data = {
+        "experience": [{"title": "Engineer", "bullets": ["a", "b", "c", "d"]}],
+        "projects": [{"title": "P", "bullets": ["x", "y"]}],
+        "skill_groups": [{"name": "Languages", "items": ["Python", "Go", "Rust"]}],
+        "skills": ["Python", "Go", "Rust"],
+    }
+
+    trimmed = _trim_render_data(
+        data,
+        experience_bullets=2,
+        project_bullets=1,
+        max_projects=1,
+        max_groups=1,
+        items_per_group=2,
+    )
+
+    assert trimmed["experience"][0]["bullets"] == ["a", "b"]
+    assert data["experience"][0]["bullets"] == ["a", "b", "c", "d"]
+    assert trimmed["skills"] == ["Python", "Go"]
 
 
 def test_ats_check_blocks_two_pages_and_missing_contact(tmp_path: Path):
@@ -211,3 +314,83 @@ def test_tailor_job_rejects_failed_ats_and_leaves_application_untouched(tmp_path
 
     assert conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0] == 0
     conn.close()
+
+
+def test_tailor_job_refuses_before_llm_or_render(tmp_path: Path, monkeypatch):
+    cfg, conn, job = _seed(tmp_path)
+    sent = tmp_path / "sent.pdf"
+    sent.write_bytes(b"ORIGINAL SENT BYTES")
+    conn.execute(
+        "INSERT INTO applications (job_id, profile_id, status, ats, resume_path, answers_json, "
+        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (job.id, 1, "submitted", "lever", str(sent), '{"Q": "A"}', "2026-01-01", "2026-01-01"),
+    )
+    conn.commit()
+    called: list[str] = []
+
+    monkeypatch.setattr(
+        services, "LLMClient", lambda *args, **kwargs: called.append("llm")
+    )
+    monkeypatch.setattr(
+        services, "tailor_resume", lambda *args, **kwargs: called.append("render")
+    )
+
+    with pytest.raises(ValueError, match="already submitted"):
+        services.tailor_job(cfg, conn, job.id)
+
+    assert called == []
+    assert sent.read_bytes() == b"ORIGINAL SENT BYTES"
+    conn.close()
+
+
+def test_tailor_job_protects_a_prior_submission_event(tmp_path: Path, monkeypatch):
+    cfg, conn, job = _seed(tmp_path)
+    conn.execute(
+        "INSERT INTO applications (job_id, profile_id, status, ats, resume_path, answers_json, "
+        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (job.id, 1, "prepared", "lever", "sent.pdf", '{"Q": "A"}', "2026-01-01", "2026-01-01"),
+    )
+    conn.commit()
+    app_id = int(conn.execute("SELECT id FROM applications").fetchone()["id"])
+    db.log_event(conn, app_id, "applied", "https://jobs.example/apply")
+    called: list[str] = []
+    monkeypatch.setattr(
+        services, "LLMClient", lambda *args, **kwargs: called.append("llm")
+    )
+    monkeypatch.setattr(
+        services, "tailor_resume", lambda *args, **kwargs: called.append("render")
+    )
+
+    with pytest.raises(ValueError, match="prior submission event"):
+        services.tailor_job(cfg, conn, job.id)
+    assert called == []
+    conn.close()
+
+
+def test_build_data_keeps_four_most_recent_experience_entries():
+    profile = Profile(
+        name="Four Roles",
+        first_name="Four",
+        last_name="Roles",
+        email="four@example.com",
+        phone="+1 555 010 0000",
+        experience=[
+            {
+                "title": f"Engineer {index}",
+                "company": f"Company {index}",
+                "start": f"202{index}-01",
+                "end": "Present" if index == 4 else f"202{index}-12",
+                "bullets": [f"Built system {index} in Python."],
+            }
+            for index in range(5)
+        ],
+        facts=[],
+    )
+    data = build_data(profile, parse_jd("Python backend engineer"), [])
+    assert len(data["experience"]) == 4
+    assert [entry["company"] for entry in data["experience"]] == [
+        "Company 0",
+        "Company 1",
+        "Company 2",
+        "Company 3",
+    ]

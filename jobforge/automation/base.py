@@ -47,6 +47,7 @@ class FillReport:
     resume_uploaded: bool = False
     cover_letter_uploaded: bool = False
     submitted: bool = False
+    required_missing: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -60,6 +61,7 @@ class FillReport:
             "resume_uploaded": self.resume_uploaded,
             "cover_letter_uploaded": self.cover_letter_uploaded,
             "submitted": self.submitted,
+            "required_missing": self.required_missing,
             "notes": self.notes,
         }
 
@@ -149,14 +151,37 @@ def _upload_to_matching(page: Page, path: str, include: tuple[str, ...]) -> bool
         inputs = page.locator('input[type="file"]').all()
     except Exception:
         return False
-    preferred = [inp for inp in inputs if any(token in _file_meta(page, inp) for token in include)]
+    scored: list[tuple[int, int, Locator]] = []
+    for index, inp in enumerate(inputs):
+        try:
+            label = _label_for(page, inp).lower()
+            name = (inp.get_attribute("name") or "").lower()
+            ident = (inp.get_attribute("id") or "").lower()
+            accept = (inp.get_attribute("accept") or "").lower()
+        except Exception:
+            continue
+        score = 0
+        for token in include:
+            if token in name or token in ident:
+                score += 4
+            if token in label:
+                score += 3
+            if token in accept:
+                score += 1
+        if score:
+            scored.append((score, index, inp))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    candidates = [item[2] for item in scored]
     # Never guess between multiple unnamed upload slots; only fall back when
     # there is exactly one file input on the page.
-    candidates = preferred or (inputs if len(inputs) == 1 else [])
+    if not candidates and len(inputs) == 1:
+        candidates = inputs
     for inp in candidates:
         try:
             inp.set_input_files(path)
-            return True
+            files = inp.evaluate("el => el.files ? el.files.length : 0")
+            if int(files or 0) > 0:
+                return True
         except Exception:
             continue
     return False
@@ -266,16 +291,124 @@ def _report_required_controls(page: Page, report: FillReport) -> None:
         except Exception:
             continue
         label = _label_for(page, control) or "required field"
-        if tag == "input" and input_type in {"checkbox", "radio"}:
+        if tag == "input" and input_type == "file":
+            try:
+                files = control.evaluate("el => el.files ? el.files.length : 0")
+            except Exception:
+                files = 0
+            if not files:
+                message = f"{label[:180]} (required file not uploaded)"
+                report.unresolved.append(message)
+                report.required_missing.append(message)
+        elif tag == "input" and input_type in {"checkbox", "radio"}:
             try:
                 if not control.is_checked():
-                    report.unresolved.append(
-                        f"{label[:180]} (required checkbox; human must confirm)"
-                    )
+                    message = f"{label[:180]} (required checkbox; human must confirm)"
+                    report.unresolved.append(message)
+                    report.required_missing.append(message)
             except Exception:
                 continue
         elif not str(value or "").strip():
-            report.unresolved.append(f"{label[:180]} (required field left empty)")
+            message = f"{label[:180]} (required field left empty)"
+            report.unresolved.append(message)
+            report.required_missing.append(message)
+
+    try:
+        combos = page.locator('[role="combobox"]').all()
+    except Exception:
+        combos = []
+    for combo in combos:
+        if not _visible(combo):
+            continue
+        try:
+            if str(combo.input_value() or "").strip():
+                continue
+            required = combo.evaluate(
+                """el => {
+                  const field = el.closest('[data-field-path]');
+                  const label = field ? field.querySelector('label') : null;
+                  if (!label) return false;
+                  return label.className.includes('required') || label.innerText.includes('*');
+                }"""
+            )
+            if not required:
+                continue
+            label = _label_for(page, combo) or _combobox_question(combo) or "required combobox"
+            message = f"{label[:180]} (required combobox left empty)"
+            report.unresolved.append(message)
+            report.required_missing.append(message)
+        except Exception:
+            continue
+
+
+def _combobox_question(combo: Locator) -> str:
+    try:
+        return str(
+            combo.evaluate(
+                """el => {
+                  const field = el.closest('[data-field-path]');
+                  const label = field ? field.querySelector('label') : null;
+                  return label ? label.innerText : (el.getAttribute('aria-label') || el.getAttribute('placeholder') || '');
+                }"""
+            )
+            or ""
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _fill_comboboxes(
+    page: Page,
+    profile: Profile,
+    prefs: Preferences,
+    bank: AnswerBank,
+    report: FillReport,
+) -> None:
+    try:
+        combos = page.locator('[role="combobox"]').all()
+    except Exception:
+        return
+    for combo in combos:
+        if not _visible(combo):
+            continue
+        question = _combobox_question(combo) or _label_for(page, combo)
+        if not question or len(question) > 240:
+            continue
+        answer = bank.answer(question, profile, prefs)
+        if not answer.value:
+            report.unresolved.append(question[:200])
+            continue
+        try:
+            combo.click()
+            try:
+                combo.fill(answer.value)
+            except Exception:
+                page.keyboard.type(answer.value)
+            page.wait_for_timeout(500)
+            options = page.locator('[role="option"]').all()
+            matched = None
+            needle = answer.value.split(",")[0].strip().lower()
+            for option in options:
+                text = option.inner_text().strip().lower()
+                if needle and (needle in text or text in needle):
+                    matched = option
+                    break
+            if matched is None and options:
+                matched = options[0]
+            if matched is None:
+                try:
+                    combo.fill("")
+                except Exception:
+                    pass
+                report.unresolved.append(f"{question[:180]} (no combobox option)")
+                continue
+            matched.click()
+            page.wait_for_timeout(200)
+            report.fields.append(
+                FieldReport(question[:200], matched.inner_text().strip(), answer.category, "filled")
+            )
+        except Exception:
+            report.unresolved.append(f"{question[:180]} (combobox fill failed)")
 
 
 def fill_form(
@@ -344,6 +477,7 @@ def fill_form(
         if len(filled_labels) == 0:
             break
 
+    _fill_comboboxes(page, profile, prefs, bank, report)
     _report_required_controls(page, report)
     report.unresolved = list(dict.fromkeys(report.unresolved))
     seen_fields: set[tuple[str, str]] = set()
@@ -450,9 +584,17 @@ def run_application(
     answer_bank_path: str | Path | None = None,
     allow_submit: bool = False,
     submission_authorized: bool = False,
+    review_only: bool = False,
     hold_seconds: int = 0,
+    non_interactive: bool = False,
     screenshot_dir: str | Path | None = None,
+    decision_shadow_path: str | Path | None = None,
+    decision_run_id: int | None = None,
+    decision_job_id: int | None = None,
+    decision_application_id: str = "",
 ) -> FillReport:
+    if review_only and (allow_submit or submission_authorized):
+        raise ValueError("Review-only mode cannot submit or authorize submission")
     if allow_submit and not submission_authorized:
         raise ValueError(
             "Unattended submit must go through services.apply_job and the persisted risk policy"
@@ -477,6 +619,41 @@ def run_application(
         )
         report.captcha = captcha_present(page)
 
+        # Phase 1: observe and record only. This cannot fill, click, or submit.
+        if decision_shadow_path:
+            try:
+                from .decision_model import decide
+                from .decision_shadow import record_shadow
+                from .observation import observe_page
+
+                observation = observe_page(
+                    page,
+                    job=job,
+                    profile=profile,
+                    prefs=prefs,
+                    bank=bank,
+                    ats=ats,
+                    resume_path=resume_path,
+                    cover_letter_path=cover_letter_path or "",
+                    quality_ready=True,
+                    risk_allowed=True,
+                    application_id=decision_application_id,
+                    step=0,
+                    attempt=0,
+                )
+                record_shadow(
+                    decision_shadow_path,
+                    observation,
+                    decide(observation),
+                    run_id=decision_run_id,
+                    job_id=decision_job_id,
+                    application_id=decision_application_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - shadow must never break apply
+                report.notes.append(
+                    f"Decision shadow unavailable: {type(exc).__name__}: {exc}"
+                )
+
         out_dir = Path(screenshot_dir) if screenshot_dir else Path("data/screenshots")
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -490,6 +667,12 @@ def run_application(
         can_submit = allow_submit and not report.captcha
         if allow_submit and not report.resume_uploaded:
             report.notes.append("Auto-submit blocked: resume was not uploaded")
+            can_submit = False
+        if allow_submit and report.required_missing:
+            detail = "; ".join(report.required_missing)[:500]
+            report.notes.append(
+                "Auto-submit blocked: required fields are still unresolved: " + detail
+            )
             can_submit = False
         if allow_submit and not any(field.category == "email" for field in report.fields):
             report.notes.append("Auto-submit blocked: email field was not filled")
@@ -522,7 +705,7 @@ def run_application(
 
         if hold_seconds > 0:
             page.wait_for_timeout(hold_seconds * 1000)
-        elif not report.submitted:
+        elif not report.submitted and not non_interactive:
             try:
                 input("\nReview the browser. Press Enter to close it (submit is manual)...")
             except EOFError:

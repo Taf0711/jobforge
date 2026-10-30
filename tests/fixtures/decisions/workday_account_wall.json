@@ -1,0 +1,24 @@
+{
+  "name": "workday_account_wall",
+  "observation": {
+    "page_kind": "account_wall",
+    "ats": "workday",
+    "url": "https://example.com/workday/apply",
+    "step": 0,
+    "fields": [],
+    "buttons": [],
+    "validation_errors": [],
+    "captcha": false,
+    "two_factor": false,
+    "account_wall": true,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "application_id": "176",
+    "attempt": 0,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "stop_account_wall",
+    "rule": "account_wall"
+  }
+}

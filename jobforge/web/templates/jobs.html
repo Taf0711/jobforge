@@ -11,7 +11,7 @@
   <input type="number" name="min_score" value="{{ min_score if min_score is not none else '' }}" min="0" max="100" placeholder="Min score">
   <select name="source">
     <option value="">All sources</option>
-    {% for s in ['greenhouse','lever','ashby','workable','smartrecruiters','direct','workday'] %}
+    {% for s in ['greenhouse','lever','ashby','workable','smartrecruiters','github_jobs','direct','workday'] %}
       <option value="{{ s }}" {{ 'selected' if source == s else '' }}>{{ s }}</option>
     {% endfor %}
   </select>

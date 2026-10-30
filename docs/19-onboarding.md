@@ -27,22 +27,24 @@ fields, or an all-or-nothing profile before the user sees any value.
 
 JobForge keeps the useful shape but removes the account and cloud layers:
 
-1. **Profile** — existing profile or upload a resume/profile file (PDF, DOCX,
-  TXT, MD, YAML, JSON; 10 MB). Prefill is heuristic; the user reviews it.
-  “Skip for now” is explicit.
-2. **Targets** — titles, locations, work modes, experience level, salary floor,
-  match threshold, sponsorship/relocation, and optional exclusions. Saved to
-  SQLite, not a remote account.
-3. **Sources** — curated direct-ATS/public-sector presets plus custom boards.
-  This is the part competitors cannot offer: JobForge makes the source choice
-  explicit instead of hiding a single aggregator.
-4. **Ready** — local readiness checklist (profile, targets, sources, GitHub,
-   Typst, browser), then finish or skip. The dashboard’s Run scan is the next
-   action.
+1. **Resume** — existing profile or upload a resume/profile file (PDF, DOCX,
+   TXT, MD, YAML, JSON; 10 MB). Prefill is heuristic; the user reviews it.
+   “Skip / use existing” is explicit.
+2. **Targets** — titles, locations, source mix, and match threshold. Advanced
+   filters (work modes, experience, salary, sponsorship/relocation, exclusions,
+   scan keywords, custom boards) are collapsed by default. Sources default to
+   a recommended AI/product/GitHub-list mix; broad adds fintech and public
+   sector. This keeps the source choice explicit without a five-checkbox wall.
+   Preferences live in SQLite; sources/scan settings are written to `config.yml`.
+3. **Start** — a short local checklist (resume, targets, sources, optional
+   model, Typst/browser warnings), then finish or skip. If no sources are saved,
+   finishing applies the recommended mix. The dashboard’s Run scan is next.
 
-GitHub is intentionally optional and post-gate: the Ready step links to
-**Connections**, where a read-only token can be connected and repositories
-reviewed. It is not a required onboarding step and never auto-adds a project.
+Model setup is no longer a wizard step. The Start page links to **Models** when
+the agent is enabled; a provider is optional and the deterministic workbench
+works without one. GitHub is intentionally optional and post-gate: Start links
+to **Connections**, where a read-only token can be connected and repositories
+reviewed. It never auto-adds a project.
 
 Design rules:
 
@@ -62,12 +64,17 @@ Design rules:
   config writer.
 - `jobforge/web/setup_presets.py` — preset registry, selection detection,
   custom-board merge.
-- `jobforge/web/templates/setup.html` — four-step UI.
+- `jobforge/web/templates/setup.html` — three-step UI (Resume, Targets, Start).
+  Sources are combined into Targets; models are optional on the final page.
 - `jobforge/web/static/app.css` — progress/checklist/preset styles.
 - `tests/test_setup.py` — first-run redirect, profile upload, preferences,
-  source writes, custom boards, finish/skip, existing-install behavior.
+  source-mix defaults, source writes, custom boards, finish/skip, and
+  existing-install behavior.
 - Settings key `setup_complete` persists completion in SQLite.
 
-The wizard writes only `sources` and `scan` into `config.yml` (atomically,
-0600). Preferences live in SQLite. A source-checkout config stays gitignored;
-an installed config stays in the JobForge app home.
+The wizard writes `sources` and `scan` into `config.yml` atomically with `0600`
+permissions. Model setup is no longer a wizard step: the final page links to
+`/providers`, which writes the provider, model, and base URL only; the API key
+goes to the OS keychain or a `0600` provider file, never to the config.
+Preferences live in SQLite. A source-checkout config stays gitignored; an
+installed config stays in the JobForge app home.

@@ -1,0 +1,34 @@
+{
+  "name": "stale_posting",
+  "observation": {
+    "page_kind": "application_form",
+    "ats": "ashby",
+    "url": "https://example.com/ashby/apply",
+    "step": 0,
+    "fields": [],
+    "buttons": [
+      {
+        "button_id": "next",
+        "label": "Next",
+        "enabled": true,
+        "is_submit": false,
+        "is_next": true,
+        "is_back": false
+      }
+    ],
+    "validation_errors": [],
+    "captcha": false,
+    "two_factor": false,
+    "account_wall": false,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "job_age_days": 508,
+    "application_id": "176",
+    "attempt": 0,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "stop_stale",
+    "rule": "stale_posting"
+  }
+}

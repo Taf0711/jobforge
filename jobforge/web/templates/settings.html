@@ -40,13 +40,14 @@
     <table class="compact"><tbody>
       <tr><td>Database</td><td><code>{{ cfg.db_path }}</code></td></tr>
       <tr><td>Output</td><td><code>{{ cfg.output_dir }}</code></td></tr>
-      <tr><td>LLM</td><td>{% if llm_ready %}<span class="pill">configured</span>{% else %}<span class="muted">off (deterministic tailoring)</span>{% endif %}</td></tr>
+      <tr><td>Model provider</td><td>{% if llm_ready %}<span class="pill">{{ active_provider }} · {{ active_model }}</span>{% else %}<span class="muted">not connected</span>{% endif %}</td></tr>
+      <tr><td>Agent</td><td>{% if features.agent %}<a href="/agent">Open agent</a> · <a href="/providers">Models</a>{% else %}<span class="muted">off</span>{% endif %}</td></tr>
       <tr><td>Email</td><td>{% if email_ready %}<span class="pill">configured</span>{% else %}<span class="muted">off</span>{% endif %}</td></tr>
       <tr><td>Submit</td><td><span class="pill">human clicks Submit</span></td></tr>
     </tbody></table>
 
     <h3>Source boards</h3>
-    <p class="muted">Use the guided <a href="/setup">Setup</a> page for presets, or edit <code>config.yml</code> directly, then run a scan.</p>
+    <p class="muted">{% if features.setup_wizard %}Use the guided <a href="/setup">Setup</a> page for presets, or edit{% else %}Edit{% endif %} <code>config.yml</code> directly, then run a scan.</p>
     <table class="compact"><tbody>
       {% for name, boards in boards.items() %}
       <tr><td>{{ name }}</td><td class="muted">{{ boards|join(', ') if boards else '—' }}</td></tr>
@@ -58,7 +59,21 @@
 
     <h3>Data</h3>
     <form method="post" action="/export"><button>Export all data (JSON)</button></form>
-    <p class="muted">Secrets are read from environment variables, never from this page.</p>
+    <p class="muted">Provider keys are managed on <a href="/providers">Models</a> or in environment variables; no secret is displayed here.</p>
   </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Feature flags</h2><span class="pill">local config</span></div>
+  <p class="muted">Toggle locally supported features. Environment variables override these values at startup.</p>
+  <form method="post" action="/settings/features" class="stack">
+    <label class="check"><input type="checkbox" name="setup_wizard" value="1" {{ 'checked' if features.setup_wizard else '' }}> Setup wizard — show <code>/setup</code>, first-run redirect, and readiness banner</label>
+    <label class="check"><input type="checkbox" name="github_connections" value="1" {{ 'checked' if features.github_connections else '' }}> GitHub connections — show repository sync and reviewed project import</label>
+    <label class="check"><input type="checkbox" name="scoring_v2" value="1" {{ 'checked' if features.scoring_v2 else '' }}> Calibrated scoring — require skill evidence and stop neutral credit for unparsed prose</label>
+    <label class="check"><input type="checkbox" name="agent" value="1" {{ 'checked' if features.agent else '' }}> Agent and models — show <code>/agent</code>, <code>/providers</code>, the optional model link on setup's final page, and the model-backed assistant</label>
+    <label class="check"><input type="checkbox" name="agent_integrations" value="1" {{ 'checked' if features.agent_integrations else '' }}> Local agent connections — allow registered read-only <code>jobforge tools</code> connections</label>
+    <div class="actions"><button class="primary">Save feature flags</button></div>
+  </form>
+  <p class="setup-note">Env overrides: <code>JOBFORGE_FEATURE_SETUP_WIZARD</code>, <code>JOBFORGE_FEATURE_GITHUB_CONNECTIONS</code>, <code>JOBFORGE_FEATURE_SCORING_V2</code>, <code>JOBFORGE_FEATURE_AGENT</code>, <code>JOBFORGE_FEATURE_AGENT_INTEGRATIONS</code>. Changing the scoring mode does not rewrite existing matches; run <strong>Score</strong> to apply it.</p>
 </section>
 {% endblock %}

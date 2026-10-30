@@ -127,8 +127,23 @@ def load_profile(
     education = data.get("education", {}) or {}
     authorization = data.get("authorization", {}) or {}
     scoring_inputs = data.get("scoring_inputs", {}) or {}
+    evidence = _load_yaml(evidence_path) if evidence_path else {}
 
     first, last = _split_name(_text(candidate.get("name")))
+    context = {
+        "resume_forge": {
+            "schema_version": data.get("schema_version"),
+            "last_updated": data.get("last_updated"),
+            "candidate": candidate,
+            "preferences": data.get("preferences", {}) or {},
+            "authorization": authorization,
+            "programs": data.get("programs", []) or [],
+            "verified_quantifiers": data.get("verified_quantifiers", {}) or {},
+            "sensitive_wording": data.get("sensitive_wording", {}) or {},
+            "resume_style_rules": data.get("resume_style_rules", {}) or {},
+            "scoring_inputs": scoring_inputs,
+        }
+    }
     profile = Profile(
         name=slugify(_text(candidate.get("name")) or "resume-forge"),
         first_name=first,
@@ -237,7 +252,6 @@ def load_profile(
                 }
             )
 
-    evidence = _load_yaml(evidence_path) if evidence_path else {}
     for group in (evidence.get("skills", {}) or {}).values():
         if isinstance(group, dict):
             skill_pool.extend(
@@ -248,6 +262,8 @@ def load_profile(
     profile.projects = projects
     profile.facts = facts
     profile.skills = _unique(skill_pool)
+    profile.evidence = evidence
+    profile.context = context
 
     if resume_path and Path(resume_path).suffix.lower() == ".pdf" and Path(resume_path).is_file():
         _merge_resume_bullets(profile, resume_path)

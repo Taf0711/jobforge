@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Agent · JobForge{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Career agent</p>
+    <h1>Ask JobForge</h1>
+    <p class="muted">The agent reads your verified profile, skills, projects, evidence, network, and application history. It can search, score, tailor, and prepare; you review and click Submit.</p>
+  </div>
+  <div class="actions">
+    <span class="pill">{{ active_provider or 'no provider' }}{% if active_model %} · {{ active_model|short(42) }}{% endif %}</span>
+    <a class="button" href="/providers">Models</a>
+  </div>
+</section>
+
+{% if not provider_ready %}
+<div class="flash setup-flash">
+  No model provider is connected. <a href="/providers">Connect one</a> to use the agent. The deterministic scanner, scorer, tailor, and quality gate still work without it.
+</div>
+{% endif %}
+
+<section class="agent-layout">
+  <aside class="panel agent-sidebar">
+    <div class="panel-head"><h2>Conversations</h2><span class="pill">{{ threads|length }}</span></div>
+    <form method="post" action="/agent/threads" class="stack">
+      <button class="primary" {% if not provider_ready %}disabled title="Connect a model provider first"{% endif %}>New conversation</button>
+    </form>
+    <div class="thread-list">
+      {% for item in threads %}
+      <a class="thread-link {{ 'active' if selected and selected.id == item.id else '' }}" href="/agent?thread={{ item.id }}">
+        <strong>{{ item.title|short(46) }}</strong>
+        <span class="muted">{{ item.updated_at|short(19) }}{% if item.model %} · {{ item.model|short(24) }}{% endif %}</span>
+      </a>
+      {% else %}
+      <p class="empty">No conversations yet.</p>
+      {% endfor %}
+    </div>
+  </aside>
+
+  <div class="panel agent-main">
+    <div class="panel-head">
+      <h2>{% if selected %}{{ selected.title|short(60) }}{% else %}Start a conversation{% endif %}</h2>
+      {% if selected %}<span class="pill">{{ selected.provider or active_provider }} · {{ selected.model or active_model }}</span>{% endif %}
+    </div>
+
+    {% if not selected %}
+      <div class="agent-welcome">
+        <p>The agent can answer from your local context and cite the facts it used.</p>
+        <div class="suggestion-grid">
+          {% for prompt in suggestions %}
+          <button class="suggestion" data-prompt="{{ prompt }}" {% if not provider_ready %}disabled{% endif %}>{{ prompt }}</button>
+          {% endfor %}
+        </div>
+        <p class="muted">Start a conversation first. Suggestions fill the composer; they do not run automatically.</p>
+      </div>
+    {% else %}
+      <div id="agent-messages" class="agent-messages" data-thread-id="{{ selected.id }}" data-ask-surface data-ask-context="Agent answer · {{ selected.title|short(60) }}">
+        {% for message in messages %}
+          {% if message.role == 'user' %}
+          <div class="chat-msg user"><div class="chat-role">You</div><div class="chat-body">{{ message.content }}</div></div>
+          {% elif message.role == 'assistant' %}
+            {% if message.content %}
+            <div class="chat-msg assistant"><div class="chat-role">JobForge</div><div class="chat-body">{{ message.content }}</div></div>
+            {% endif %}
+            {% if message.tool_calls %}
+            <div class="tool-row">Used {{ message.tool_calls|map(attribute='name')|join(', ') }}</div>
+            {% endif %}
+          {% elif message.role == 'tool' %}
+          <details class="tool-call">
+            <summary>{{ message.name or 'tool' }}{% if message.content %} · {{ message.content|short(90) }}{% endif %}</summary>
+            <pre>{{ message.content|short(5000) }}</pre>
+          </details>
+          {% endif %}
+        {% else %}
+        <p class="empty">No messages yet. Ask about a role, a skill, a project, or your application funnel.</p>
+        {% endfor %}
+      </div>
+
+      <div id="agent-status" class="agent-status" role="status"></div>
+      <p class="setup-note">Chat runs may be billable by your provider. Closing the tab does not cancel an in-flight request.</p>
+      <form id="agent-form" class="agent-composer" data-thread-id="{{ selected.id }}" data-provider-ready="{{ '1' if provider_ready else '0' }}">
+        <label class="sr-only" for="agent-input">Message</label>
+        <textarea id="agent-input" name="message" rows="3" placeholder="Find my best matches, explain a gap, or tailor a role..." {% if not provider_ready %}disabled{% endif %}></textarea>
+        <div class="agent-compose-actions">
+          <label class="check"><input type="checkbox" id="agent-allow-writes" name="allow_writes" value="1" {{ 'checked' if default_allow_writes else '' }}> Allow actions (tailor, scan, queue)</label>
+          <span class="muted">The agent cannot submit.</span>
+          <button id="agent-send" class="primary" {% if not provider_ready %}disabled{% endif %}>Send</button>
+        </div>
+      </form>
+      <div class="suggestion-grid compact">
+        {% for prompt in suggestions %}
+        <button class="suggestion" data-prompt="{{ prompt }}" {% if not provider_ready %}disabled{% endif %}>{{ prompt }}</button>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</section>
+
+<script src="/static/agent.js" defer></script>
+{% endblock %}

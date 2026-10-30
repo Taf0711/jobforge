@@ -102,12 +102,21 @@ class AnswerBank:
             canonical,
         ):
             authorized = _as_bool(profile.work_auth.get("authorized"))
+            if authorized is None:
+                # resume-forge imports use the canonical `work_authorized_us`
+                # key; accept both without changing the profile schema.
+                authorized = _as_bool(profile.work_auth.get("work_authorized_us"))
             if authorized is not None:
                 return Answer("Yes" if authorized else "No", "work_authorization", "high")
             return Answer("", "work_authorization", "none")
         if re.search(r"(require|need).*(sponsor|visa)|sponsorship", canonical):
             value = None
-            for key in ("needs_sponsorship", "requires_sponsorship", "sponsorship"):
+            for key in (
+                "needs_sponsorship",
+                "requires_sponsorship",
+                "sponsorship",
+                "sponsorship_needed",
+            ):
                 if key in profile.work_auth:
                     value = _as_bool(profile.work_auth.get(key))
                     if value is not None:

@@ -13,13 +13,22 @@ import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any, Generator
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import db, services
+from ..automation.drafter import (
+    DraftError,
+    approve_draft,
+    draft_answer,
+    list_drafts,
+    reject_draft,
+)
 from ..config import Config
+from ..locking import action_lock
 
 WEB_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
@@ -110,15 +119,13 @@ def create_answers_router(config: Config) -> APIRouter:
     def get_conn() -> Generator[sqlite3.Connection, None, None]:
         conn = db.connect(config.db_path)
         try:
-            services.ensure_profile(config, conn)
             yield conn
         finally:
             conn.close()
 
     @router.get("/answers", response_class=HTMLResponse)
     def answers_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
-        # get_conn already ensured the profile exists for this request.
-        profile = db.get_active_profile(conn)
+        profile, _ = services.require_profile(config, conn)
         overrides = read_overrides(answers_path(config))
         return templates.TemplateResponse(
             request=request,
@@ -128,7 +135,9 @@ def create_answers_router(config: Config) -> APIRouter:
                 "profile": profile,
                 "msg": request.query_params.get("msg", ""),
                 "overrides": dict(sorted(overrides.items())),
+                "drafts": list_drafts(config),
                 "rules": BUILTIN_RULES,
+                "features": config.features,
                 "max_entries": MAX_ENTRIES,
                 "max_key_chars": MAX_KEY_CHARS,
                 "max_value_chars": MAX_VALUE_CHARS,
@@ -142,20 +151,78 @@ def create_answers_router(config: Config) -> APIRouter:
         conn: sqlite3.Connection = Depends(get_conn),
     ):
         path = answers_path(config)
-        overrides = read_overrides(path)
         try:
             incoming = validate_overrides({key: value})
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         new_key, new_value = next(iter(incoming.items()))
-        if new_key not in overrides and len(overrides) >= MAX_ENTRIES:
-            raise HTTPException(
-                status_code=400, detail=f"Too many overrides (max {MAX_ENTRIES})"
-            )
-        overrides[new_key] = new_value
-        write_overrides(path, overrides)
+        with action_lock(config):
+            # Re-read under the lock: another writer may have changed the bank
+            # while this request was validating its input.
+            overrides = read_overrides(path)
+            if new_key not in overrides and len(overrides) >= MAX_ENTRIES:
+                raise HTTPException(
+                    status_code=400, detail=f"Too many overrides (max {MAX_ENTRIES})"
+                )
+            overrides[new_key] = new_value
+            write_overrides(path, overrides)
         return RedirectResponse("/answers", status_code=303)
+
+    @router.post("/answers/draft")
+    def create_answer_draft(
+        job_id: int = Form(...),
+        question: str = Form(""),
+        category: str = Form("motivation"),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        try:
+            draft = draft_answer(config, conn, job_id, question, category=category)
+        except DraftError as exc:
+            return RedirectResponse(
+                f"/answers?msg={quote(str(exc))}", status_code=303
+            )
+        return RedirectResponse(
+            f"/answers?msg={quote('Draft generated. Review it below before approving.')}",
+            status_code=303,
+        )
+
+    @router.post("/answers/drafts/{draft_id}/approve")
+    def approve_answer_draft(
+        draft_id: str,
+        text: str = Form(""),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        try:
+            approve_draft(config, draft_id, text=text)
+        except DraftError as exc:
+            return RedirectResponse(
+                f"/answers?msg={quote(str(exc))}", status_code=303
+            )
+        return RedirectResponse(
+            f"/answers?msg={quote('Draft approved and added to the answer bank.')}",
+            status_code=303,
+        )
+
+    @router.post("/answers/drafts/{draft_id}/reject")
+    def reject_answer_draft(
+        draft_id: str,
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        try:
+            reject_draft(config, draft_id)
+        except DraftError as exc:
+            return RedirectResponse(
+                f"/answers?msg={quote(str(exc))}", status_code=303
+            )
+        return RedirectResponse(
+            f"/answers?msg={quote('Draft rejected. It was not added to the answer bank.')}",
+            status_code=303,
+        )
+
+    @router.get("/api/answers/drafts")
+    def api_answer_drafts(conn: sqlite3.Connection = Depends(get_conn)):
+        return [draft.to_dict() for draft in list_drafts(config)]
 
     @router.get("/api/answers")
     def api_answers(conn: sqlite3.Connection = Depends(get_conn)):
@@ -171,7 +238,8 @@ def create_answers_router(config: Config) -> APIRouter:
             overrides = validate_overrides(data)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        write_overrides(answers_path(config), overrides)
+        with action_lock(config):
+            write_overrides(answers_path(config), overrides)
         return overrides
 
     return router

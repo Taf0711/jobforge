@@ -1,0 +1,51 @@
+{
+  "name": "lever_validation_loop",
+  "observation": {
+    "page_kind": "application_form",
+    "ats": "lever",
+    "url": "https://example.com/lever/apply",
+    "step": 0,
+    "fields": [
+      {
+        "field_id": "email",
+        "label": "Email",
+        "kind": "email",
+        "required": true,
+        "visible": true,
+        "enabled": true,
+        "value": "bad-email",
+        "category": "contact",
+        "sensitive": false,
+        "has_grounded_answer": false,
+        "answer_value": "",
+        "value_source": "none"
+      }
+    ],
+    "buttons": [
+      {
+        "button_id": "submit",
+        "label": "Submit application",
+        "enabled": true,
+        "is_submit": true,
+        "is_next": false,
+        "is_back": false
+      }
+    ],
+    "validation_errors": [
+      "Enter a valid email address"
+    ],
+    "captcha": false,
+    "two_factor": false,
+    "account_wall": false,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "application_id": "176",
+    "attempt": 2,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "ask_human",
+    "rule": "stuck_validation",
+    "requires_human": true
+  }
+}

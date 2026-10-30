@@ -18,13 +18,14 @@
         <td class="muted">{{ app.ats or '—' }}</td>
         <td>
           <form method="post" action="/applications/{{ app.id }}/status" class="inline">
-            <select name="status" onchange="this.form.submit()">
+            <select name="status" data-autosubmit>
               {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if app.status == s else '' }}>{{ s }}</option>{% endfor %}
             </select>
+            <noscript><button class="ghost">Update</button></noscript>
           </form>
         </td>
         <td class="muted">{{ app.updated_at[:16] }}</td>
-        <td>{% if app.resume_path %}<a class="link" href="file://{{ app.resume_path }}">PDF</a>{% else %}—{% endif %}</td>
+        <td>{% if app.resume_path %}<a class="link" href="/artifacts/{{ app.id }}/resume">PDF</a>{% else %}—{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

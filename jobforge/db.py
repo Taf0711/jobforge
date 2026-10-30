@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -19,7 +22,7 @@ from .models import (
     utcnow,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -149,6 +152,30 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS agent_threads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    title TEXT NOT NULL DEFAULT 'New conversation',
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_threads_profile ON agent_threads(profile_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id INTEGER NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL DEFAULT '',
+    tool_call_id TEXT NOT NULL DEFAULT '',
+    tool_calls_json TEXT NOT NULL DEFAULT '[]',
+    usage_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_thread ON agent_messages(thread_id, id);
+
 CREATE TABLE IF NOT EXISTS connections (
     provider TEXT PRIMARY KEY,
     account_id TEXT NOT NULL DEFAULT '',
@@ -159,6 +186,74 @@ CREATE TABLE IF NOT EXISTS connections (
     connected_at TEXT NOT NULL,
     last_sync_at TEXT,
     meta_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS agent_instances (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL DEFAULT 'local',
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_connections (
+    id TEXT PRIMARY KEY,
+    instance_id TEXT NOT NULL REFERENCES agent_instances(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    client TEXT NOT NULL DEFAULT 'generic',
+    label TEXT NOT NULL DEFAULT '',
+    scopes_json TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    generation INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_profile ON agent_connections(profile_id);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_instance ON agent_connections(instance_id);
+
+CREATE TABLE IF NOT EXISTS agent_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(profile_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_profile ON agent_memories(profile_id);
+
+CREATE TABLE IF NOT EXISTS agent_operations (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    approved_at TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    owner_nonce TEXT,
+    result_json TEXT NOT NULL DEFAULT '{}',
+    error_code TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    UNIQUE(connection_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_operations_state ON agent_operations(state, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_operations_profile ON agent_operations(profile_id);
+
+CREATE TABLE IF NOT EXISTS agent_operation_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id TEXT NOT NULL REFERENCES agent_operations(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(operation_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS github_repos (
@@ -196,6 +291,18 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def connect_readonly(path: str | Path) -> sqlite3.Connection:
+    """Open an existing database without creating schema or changing journal mode."""
+    db_path = Path(path)
+    if not db_path.exists():
+        raise FileNotFoundError(str(db_path))
+    uri = db_path.resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -300,6 +407,7 @@ def list_jobs(
     one_per_company: bool = False,
     limit: int = 100,
     offset: int = 0,
+    exclude_sources: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     where = ["1=1"]
     params: list[Any] = []
@@ -310,6 +418,15 @@ def list_jobs(
     if source:
         where.append("j.source=?")
         params.append(source)
+    else:
+        # Imported resume-forge tracker rows are historical applications, not
+        # live opportunities. They stay addressable by id and by an explicit
+        # source filter, but they do not enter the feed or queue by default.
+        where.append("j.source <> 'resume-forge'")
+    if exclude_sources:
+        placeholders = ",".join("?" for _ in exclude_sources)
+        where.append(f"j.source NOT IN ({placeholders})")
+        params.extend(exclude_sources)
     if min_score is not None:
         where.append("COALESCE(m.score,0) >= ?")
         params.append(min_score)
@@ -358,11 +475,12 @@ def list_jobs(
 
 def count_jobs(conn: sqlite3.Connection, profile_id: int | None = None) -> int:
     if profile_id is None:
-        row = conn.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()
+        row = conn.execute("SELECT COUNT(*) AS n FROM jobs WHERE source <> 'resume-forge'").fetchone()
     else:
         row = conn.execute(
             "SELECT COUNT(*) AS n FROM jobs j LEFT JOIN hidden_jobs h "
-            "ON h.job_id=j.id AND h.profile_id=? WHERE h.job_id IS NULL",
+            "ON h.job_id=j.id AND h.profile_id=? "
+            "WHERE h.job_id IS NULL AND j.source <> 'resume-forge'",
             (profile_id,),
         ).fetchone()
     return int(row["n"])
@@ -521,7 +639,9 @@ def create_application(conn: sqlite3.Connection, app: Application) -> int:
             status=excluded.status, ats=excluded.ats, resume_path=excluded.resume_path,
             cover_letter_path=excluded.cover_letter_path, answers_json=excluded.answers_json,
             screenshot_path=excluded.screenshot_path, error_code=excluded.error_code,
-            notes=excluded.notes, updated_at=excluded.updated_at
+            notes=excluded.notes,
+            submitted_at=COALESCE(excluded.submitted_at, applications.submitted_at),
+            updated_at=excluded.updated_at
         """,
         (
             app.job_id,
@@ -760,6 +880,119 @@ def setting_set(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
     conn.commit()
 
+# Agent threads and messages
+
+def create_agent_thread(
+    conn: sqlite3.Connection,
+    profile_id: int,
+    *,
+    title: str = "New conversation",
+    provider: str = "",
+    model: str = "",
+) -> int:
+    now = utcnow()
+    cur = conn.execute(
+        "INSERT INTO agent_threads (profile_id, title, provider, model, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (profile_id, title[:120] or "New conversation", provider, model, now, now),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_agent_threads(
+    conn: sqlite3.Connection, profile_id: int, limit: int = 50
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM agent_threads WHERE profile_id=? ORDER BY updated_at DESC, id DESC LIMIT ?",
+        (profile_id, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_agent_thread(conn: sqlite3.Connection, thread_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM agent_threads WHERE id=?", (thread_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_agent_thread(
+    conn: sqlite3.Connection,
+    thread_id: int,
+    *,
+    title: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> None:
+    fields = ["updated_at=?"]
+    params: list[Any] = [utcnow()]
+    if title is not None:
+        fields.append("title=?")
+        params.append(title[:120] or "New conversation")
+    if provider is not None:
+        fields.append("provider=?")
+        params.append(provider)
+    if model is not None:
+        fields.append("model=?")
+        params.append(model)
+    params.append(thread_id)
+    conn.execute(f"UPDATE agent_threads SET {', '.join(fields)} WHERE id=?", params)
+    conn.commit()
+
+
+def delete_agent_thread(conn: sqlite3.Connection, thread_id: int) -> None:
+    conn.execute("DELETE FROM agent_threads WHERE id=?", (thread_id,))
+    conn.commit()
+
+
+def add_agent_message(
+    conn: sqlite3.Connection,
+    thread_id: int,
+    role: str,
+    *,
+    content: str = "",
+    name: str = "",
+    tool_call_id: str = "",
+    tool_calls: list[dict[str, Any]] | None = None,
+    usage: dict[str, Any] | None = None,
+) -> int:
+    if role not in {"user", "assistant", "tool", "system"}:
+        raise ValueError(f"Invalid agent message role: {role!r}")
+    now = utcnow()
+    cur = conn.execute(
+        "INSERT INTO agent_messages "
+        "(thread_id, role, content, name, tool_call_id, tool_calls_json, usage_json, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            thread_id,
+            role,
+            content,
+            name,
+            tool_call_id,
+            json.dumps(tool_calls or [], ensure_ascii=False),
+            json.dumps(usage or {}, ensure_ascii=False),
+            now,
+        ),
+    )
+    conn.execute("UPDATE agent_threads SET updated_at=? WHERE id=?", (now, thread_id))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def list_agent_messages(
+    conn: sqlite3.Connection, thread_id: int, limit: int = 200
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM agent_messages WHERE thread_id=? ORDER BY id ASC LIMIT ?",
+        (thread_id, limit),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        data = dict(row)
+        data["tool_calls"] = json.loads(data.pop("tool_calls_json") or "[]")
+        data["usage"] = json.loads(data.pop("usage_json") or "{}")
+        out.append(data)
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Connections and imported GitHub context
@@ -984,7 +1217,9 @@ def stats(conn: sqlite3.Connection, profile_id: int | None = None) -> dict[str, 
     ).fetchall()
     apps = {r["status"]: r["n"] for r in app_rows}
     avg = conn.execute(
-        "SELECT AVG(score) AS s FROM matches " + ("WHERE profile_id=?" if profile_id is not None else ""),
+        "SELECT AVG(m.score) AS s FROM matches m JOIN jobs j ON j.id=m.job_id "
+        + ("WHERE m.profile_id=? AND " if profile_id is not None else "WHERE ")
+        + "j.source <> 'resume-forge'",
         params,
     ).fetchone()
     return {
@@ -993,6 +1228,362 @@ def stats(conn: sqlite3.Connection, profile_id: int | None = None) -> dict[str, 
         "applications_total": sum(apps.values()),
         "avg_match": round(float(avg["s"] or 0), 1),
     }
+
+
+def _agent_instance_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return dict(row)
+
+
+def create_agent_instance(conn: sqlite3.Connection, label: str = "local") -> dict[str, Any]:
+    instance_id = f"inst_{uuid.uuid4().hex}"
+    now = utcnow()
+    conn.execute(
+        "INSERT INTO agent_instances (id, label, created_at, last_seen_at) VALUES (?,?,?,?)",
+        (instance_id, label[:80], now, now),
+    )
+    conn.commit()
+    return get_agent_instance(conn, instance_id) or {}
+
+
+def get_agent_instance(conn: sqlite3.Connection, instance_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM agent_instances WHERE id=?", (instance_id,)).fetchone()
+    return _agent_instance_from_row(row) if row else None
+
+
+def list_agent_instances(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM agent_instances ORDER BY created_at, id").fetchall()
+    return [_agent_instance_from_row(row) for row in rows]
+
+
+def _agent_connection_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    data = dict(row)
+    data["scopes"] = json.loads(data.pop("scopes_json") or "[]")
+    data["enabled"] = bool(data["enabled"])
+    return data
+
+
+def create_agent_connection(
+    conn: sqlite3.Connection,
+    *,
+    instance_id: str,
+    profile_id: int,
+    client: str = "generic",
+    label: str = "",
+    scopes: list[str] | None = None,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    if get_agent_instance(conn, instance_id) is None:
+        raise ValueError("Agent instance not found")
+    if get_profile(conn, profile_id) is None:
+        raise ValueError("Profile not found")
+    connection_id = f"conn_{uuid.uuid4().hex}"
+    now = utcnow()
+    normalized = sorted({str(item).strip() for item in (scopes or []) if str(item).strip()})
+    conn.execute(
+        """
+        INSERT INTO agent_connections
+            (id, instance_id, profile_id, client, label, scopes_json, enabled,
+             generation, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            connection_id,
+            instance_id,
+            profile_id,
+            client[:40],
+            label[:120],
+            json.dumps(normalized, ensure_ascii=False),
+            int(bool(enabled)),
+            1,
+            now,
+        ),
+    )
+    conn.commit()
+    return get_agent_connection(conn, connection_id) or {}
+
+
+def get_agent_connection(conn: sqlite3.Connection, connection_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM agent_connections WHERE id=?", (connection_id,)).fetchone()
+    return _agent_connection_from_row(row) if row else None
+
+
+def list_agent_connections(
+    conn: sqlite3.Connection, *, include_disabled: bool = True
+) -> list[dict[str, Any]]:
+    where = "" if include_disabled else "WHERE enabled=1"
+    rows = conn.execute(
+        f"SELECT * FROM agent_connections {where} ORDER BY created_at, id"
+    ).fetchall()
+    return [_agent_connection_from_row(row) for row in rows]
+
+
+def update_agent_connection_scopes(
+    conn: sqlite3.Connection, connection_id: str, scopes: list[str]
+) -> dict[str, Any] | None:
+    current = get_agent_connection(conn, connection_id)
+    if current is None:
+        return None
+    merged = sorted(set(current.get("scopes") or []) | {str(item).strip() for item in scopes if str(item).strip()})
+    conn.execute(
+        "UPDATE agent_connections SET scopes_json=?, generation=generation+1 WHERE id=?",
+        (json.dumps(merged, ensure_ascii=False), connection_id),
+    )
+    conn.commit()
+    return get_agent_connection(conn, connection_id)
+
+
+def disable_agent_connection(conn: sqlite3.Connection, connection_id: str) -> dict[str, Any] | None:
+    now = utcnow()
+    conn.execute(
+        "UPDATE agent_connections SET enabled=0, revoked_at=?, generation=generation+1 "
+        "WHERE id=?",
+        (now, connection_id),
+    )
+    conn.commit()
+    return get_agent_connection(conn, connection_id)
+
+
+def touch_agent_connection(conn: sqlite3.Connection, connection_id: str) -> None:
+    conn.execute(
+        "UPDATE agent_connections SET last_used_at=? WHERE id=?",
+        (utcnow(), connection_id),
+    )
+    conn.commit()
+
+
+def remember_agent_memory(
+    conn: sqlite3.Connection,
+    *,
+    connection_id: str,
+    profile_id: int,
+    key: str,
+    value: str,
+) -> dict[str, Any]:
+    now = utcnow()
+    conn.execute(
+        """
+        INSERT INTO agent_memories (connection_id, profile_id, key, value, created_at, updated_at)
+        VALUES (?,?,?,?,?,?)
+        ON CONFLICT(profile_id, key) DO UPDATE SET
+            connection_id=excluded.connection_id,
+            value=excluded.value,
+            updated_at=excluded.updated_at
+        """,
+        (connection_id, profile_id, key, value, now, now),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM agent_memories WHERE profile_id=? AND key=?",
+        (profile_id, key),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def list_agent_memories(
+    conn: sqlite3.Connection,
+    *,
+    profile_id: int,
+    query: str = "",
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    where = ["profile_id=?"]
+    params: list[Any] = [profile_id]
+    if query:
+        where.append("(key LIKE ? OR value LIKE ?)")
+        like = f"%{query}%"
+        params.extend([like, like])
+    rows = conn.execute(
+        f"SELECT * FROM agent_memories WHERE {' AND '.join(where)} "
+        "ORDER BY updated_at DESC, id DESC LIMIT ?",
+        [*params, max(1, min(50, limit))],
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def forget_agent_memory(conn: sqlite3.Connection, *, profile_id: int, key: str) -> bool:
+    cur = conn.execute(
+        "DELETE FROM agent_memories WHERE profile_id=? AND key=?",
+        (profile_id, key),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def _operation_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    data = dict(row)
+    data["payload"] = json.loads(data.pop("payload_json") or "{}")
+    data["result"] = json.loads(data.pop("result_json") or "{}")
+    return data
+
+
+def create_agent_operation(
+    conn: sqlite3.Connection,
+    *,
+    connection_id: str,
+    profile_id: int,
+    action: str,
+    payload: dict[str, Any],
+    idempotency_key: str,
+    ttl_minutes: int = 1440,
+) -> dict[str, Any]:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    existing = conn.execute(
+        "SELECT * FROM agent_operations WHERE connection_id=? AND idempotency_key=?",
+        (connection_id, idempotency_key),
+    ).fetchone()
+    if existing:
+        if existing["payload_hash"] != payload_hash:
+            raise ValueError("Idempotency key already used with a different request.")
+        return _operation_from_row(existing)
+    now = utcnow()
+    expires = datetime.now(timezone.utc) + timedelta(minutes=max(1, min(1440, ttl_minutes)))
+    operation_id = f"op_{uuid.uuid4().hex}"
+    conn.execute(
+        """
+        INSERT INTO agent_operations
+            (id, connection_id, profile_id, action, payload_json, payload_hash,
+             idempotency_key, state, created_at, expires_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            operation_id,
+            connection_id,
+            profile_id,
+            action,
+            canonical,
+            payload_hash,
+            idempotency_key,
+            "pending_approval",
+            now,
+            expires.isoformat(timespec="seconds"),
+        ),
+    )
+    append_agent_operation_event(conn, operation_id, "created", {"action": action})
+    conn.commit()
+    return get_agent_operation(conn, operation_id) or {}
+
+
+def get_agent_operation(conn: sqlite3.Connection, operation_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM agent_operations WHERE id=?", (operation_id,)
+    ).fetchone()
+    return _operation_from_row(row) if row else None
+
+
+def list_agent_operations(
+    conn: sqlite3.Connection,
+    *,
+    profile_id: int | None = None,
+    connection_id: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    where = ["1=1"]
+    params: list[Any] = []
+    if profile_id is not None:
+        where.append("profile_id=?")
+        params.append(profile_id)
+    if connection_id is not None:
+        where.append("connection_id=?")
+        params.append(connection_id)
+    rows = conn.execute(
+        f"SELECT * FROM agent_operations WHERE {' AND '.join(where)} "
+        "ORDER BY created_at DESC, id DESC LIMIT ?",
+        [*params, max(1, min(100, limit))],
+    ).fetchall()
+    return [_operation_from_row(row) for row in rows]
+
+
+def append_agent_operation_event(
+    conn: sqlite3.Connection, operation_id: str, kind: str, detail: dict[str, Any] | None = None
+) -> None:
+    row = conn.execute(
+        "SELECT COALESCE(MAX(seq),0)+1 AS next FROM agent_operation_events WHERE operation_id=?",
+        (operation_id,),
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO agent_operation_events (operation_id, seq, at, kind, detail_json) "
+        "VALUES (?,?,?,?,?)",
+        (
+            operation_id,
+            int(row["next"]),
+            utcnow(),
+            kind,
+            json.dumps(detail or {}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+
+
+def update_agent_operation(conn: sqlite3.Connection, operation_id: str, **fields: Any) -> dict[str, Any] | None:
+    allowed = {
+        "state",
+        "approved_at",
+        "started_at",
+        "finished_at",
+        "owner_nonce",
+        "result_json",
+        "error_code",
+        "error_message",
+    }
+    sets: list[str] = []
+    values: list[Any] = []
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key == "result_json" and not isinstance(value, str):
+            value = json.dumps(value, ensure_ascii=False)
+        sets.append(f"{key}=?")
+        values.append(value)
+    if not sets:
+        return get_agent_operation(conn, operation_id)
+    values.append(operation_id)
+    conn.execute(f"UPDATE agent_operations SET {', '.join(sets)} WHERE id=?", values)
+    conn.commit()
+    return get_agent_operation(conn, operation_id)
+
+
+def approve_agent_operation(conn: sqlite3.Connection, operation_id: str) -> dict[str, Any] | None:
+    now = utcnow()
+    conn.execute(
+        "UPDATE agent_operations SET state='approved', approved_at=? "
+        "WHERE id=? AND state='pending_approval'",
+        (now, operation_id),
+    )
+    conn.commit()
+    operation = get_agent_operation(conn, operation_id)
+    if operation and operation["state"] == "approved":
+        append_agent_operation_event(conn, operation_id, "approved", {})
+    return operation
+
+
+def deny_agent_operation(conn: sqlite3.Connection, operation_id: str) -> dict[str, Any] | None:
+    conn.execute(
+        "UPDATE agent_operations SET state='denied', finished_at=? "
+        "WHERE id=? AND state='pending_approval'",
+        (utcnow(), operation_id),
+    )
+    conn.commit()
+    operation = get_agent_operation(conn, operation_id)
+    if operation and operation["state"] == "denied":
+        append_agent_operation_event(conn, operation_id, "denied", {})
+    return operation
+
+
+def claim_agent_operation(
+    conn: sqlite3.Connection, operation_id: str, owner_nonce: str
+) -> dict[str, Any] | None:
+    now = utcnow()
+    cur = conn.execute(
+        "UPDATE agent_operations SET state='running', started_at=?, owner_nonce=? "
+        "WHERE id=? AND state='approved'",
+        (now, owner_nonce, operation_id),
+    )
+    conn.commit()
+    if cur.rowcount != 1:
+        return get_agent_operation(conn, operation_id)
+    append_agent_operation_event(conn, operation_id, "claimed", {"owner": owner_nonce[:12]})
+    return get_agent_operation(conn, operation_id)
 
 
 def export_all(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -1010,11 +1601,21 @@ def export_all(conn: sqlite3.Connection) -> dict[str, Any]:
         "settings",
         "connections",
         "github_repos",
+        "agent_threads",
+        "agent_messages",
+        "agent_instances",
+        "agent_connections",
+        "agent_memories",
+        "agent_operations",
+        "agent_operation_events",
     ]
     out: dict[str, Any] = {}
     for table in tables:
         rows = conn.execute(f"SELECT * FROM {table}").fetchall()
         out[table] = [dict(r) for r in rows]
+    # Worker claim nonces are authority material, not user data.
+    for row in out.get("agent_operations", []):
+        row.pop("owner_nonce", None)
     return out
 
 
@@ -1033,6 +1634,13 @@ def delete_all(conn: sqlite3.Connection) -> None:
         "settings",
         "connections",
         "github_repos",
+        "agent_messages",
+        "agent_threads",
+        "agent_operation_events",
+        "agent_operations",
+        "agent_memories",
+        "agent_connections",
+        "agent_instances",
     ]:
         conn.execute(f"DELETE FROM {table}")
     conn.commit()

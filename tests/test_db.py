@@ -45,6 +45,39 @@ def test_profile_preferences_and_match(tmp_path: Path):
     assert db.get_preferences(conn, pid).titles == ["Engineer"]
 
 
+def test_application_upsert_persists_submitted_at(tmp_path: Path):
+    path = tmp_path / "test.sqlite3"
+    db.init_db(path)
+    conn = db.connect(path)
+    pid = db.save_profile(conn, Profile(name="tester"))
+    jid = db.upsert_job(
+        conn, Job(source="lever", source_id="4", company="Acme", title="Engineer")
+    )
+    app_id = db.create_application(
+        conn, Application(job_id=jid, profile_id=pid, status="prepared")
+    )
+    assert db.get_application(conn, app_id).submitted_at is None
+
+    db.create_application(
+        conn,
+        Application(
+            job_id=jid,
+            profile_id=pid,
+            status="submitted",
+            submitted_at="2026-10-29T12:00:00+00:00",
+        ),
+    )
+    stored = db.get_application(conn, app_id)
+    assert stored.status == "submitted"
+    assert stored.submitted_at == "2026-10-29T12:00:00+00:00"
+
+    # A later non-submitted upsert must not erase submission history.
+    db.create_application(
+        conn, Application(job_id=jid, profile_id=pid, status="prepared")
+    )
+    assert db.get_application(conn, app_id).submitted_at == "2026-10-29T12:00:00+00:00"
+
+
 def test_application_events_and_export(tmp_path: Path):
     path = tmp_path / "test.sqlite3"
     db.init_db(path)

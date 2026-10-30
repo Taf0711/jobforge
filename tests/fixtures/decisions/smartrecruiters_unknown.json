@@ -1,0 +1,25 @@
+{
+  "name": "smartrecruiters_unknown",
+  "observation": {
+    "page_kind": "unknown",
+    "ats": "smartrecruiters",
+    "url": "https://example.com/smartrecruiters/apply",
+    "step": 0,
+    "fields": [],
+    "buttons": [],
+    "validation_errors": [],
+    "captcha": false,
+    "two_factor": false,
+    "account_wall": false,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "application_id": "176",
+    "attempt": 0,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "abstain",
+    "rule": "unknown_page",
+    "requires_human": true
+  }
+}

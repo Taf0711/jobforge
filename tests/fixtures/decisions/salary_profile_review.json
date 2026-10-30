@@ -1,0 +1,50 @@
+{
+  "name": "salary_profile_review",
+  "observation": {
+    "page_kind": "application_form",
+    "ats": "ashby",
+    "url": "https://example.com/ashby/apply",
+    "step": 0,
+    "fields": [
+      {
+        "field_id": "salary",
+        "label": "Desired salary",
+        "kind": "text",
+        "required": true,
+        "visible": true,
+        "enabled": true,
+        "value": "",
+        "category": "salary",
+        "sensitive": false,
+        "has_grounded_answer": true,
+        "answer_value": "130000",
+        "value_source": "profile"
+      }
+    ],
+    "buttons": [
+      {
+        "button_id": "submit",
+        "label": "Submit application",
+        "enabled": true,
+        "is_submit": true,
+        "is_next": false,
+        "is_back": false
+      }
+    ],
+    "validation_errors": [],
+    "captcha": false,
+    "two_factor": false,
+    "account_wall": false,
+    "quality_ready": true,
+    "risk_allowed": true,
+    "application_id": "176",
+    "attempt": 0,
+    "confidence": 0.97
+  },
+  "expected": {
+    "action": "request_review",
+    "rule": "required_review",
+    "target": "salary",
+    "requires_human": true
+  }
+}

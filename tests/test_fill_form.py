@@ -31,7 +31,9 @@ def test_fill_form_second_pass_and_required_checkbox(tmp_path: Path):
               <label for="name">Full name</label><input id="name">
               <label for="email">Email</label><input id="email" type="email">
               <label for="phone">Phone</label><input id="phone" type="tel">
-              <label for="resume">Resume</label><input id="resume" type="file">
+              <label for="_systemfield_resume">Resume</label>
+              <input id="_systemfield_resume" type="file" required>
+              <input id="extra-upload" type="file">
               <label for="work_auth">Are you authorized to work in the United States?</label>
               <select id="work_auth" onchange="
                 document.getElementById('visa-wrap').style.display =
@@ -46,6 +48,12 @@ def test_fill_form_second_pass_and_required_checkbox(tmp_path: Path):
               </div>
               <label for="agree">I agree to the terms</label>
               <input id="agree" type="checkbox" required>
+              <label for="why">Why this company? *</label>
+              <textarea id="why" required></textarea>
+              <div data-field-path="_systemfield_location">
+                <label class="required" for="loc">Location</label>
+                <input id="loc" role="combobox" placeholder="Start typing...">
+              </div>
             </form>
             """
         )
@@ -60,7 +68,12 @@ def test_fill_form_second_pass_and_required_checkbox(tmp_path: Path):
         )
 
         assert report.resume_uploaded is True
+        assert page.locator("#_systemfield_resume").evaluate(
+            "el => el.files ? el.files.length : 0"
+        ) == 1
         assert any("Email" in field.label for field in report.fields)
         assert any("Visa type" in item for item in report.unresolved)
         assert any("required checkbox" in item.lower() for item in report.unresolved)
+        assert any("Why this company" in item for item in report.required_missing)
+        assert any("Location" in item for item in report.required_missing)
         browser.close()

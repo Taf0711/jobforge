@@ -1,372 +1,143 @@
 # JobForge
 
-A local-first job search workbench: discover fresh roles from public ATS boards, score them with an explainable model, tailor a truthful resume, fill the application in your own browser, and track the outcome.
+A local-first job-search workbench for your coding agent. JobForge finds public-ATS jobs, scores fit, tailors a verified one-page resume, and opens a review-only application form. The agent never submits; you review and click Submit.
 
-Built as an independent clean-room replacement for the useful parts of paid auto-apply services. It does not use their API, data, code, or branding.
+The optional dashboard is a local review console, not a separate job-search app.
 
 ## What it does
 
-| Loop | What happens |
-|---|---|
-| **Discover** | Pulls jobs from Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Workday, USAJobs, and NYC Open Data public APIs; accepts a pasted job URL |
-| **Decide** | Scores each job as `weighted skill coverage × hard-gate survival`, with reasons, gaps, and a per-requirement table |
-| **Prepare** | Selects the most relevant verified bullets, reorders grouped skills, and renders the refined resume-forge one-page Typst layout |
-| **Connect** | Optional read-only GitHub connection: syncs owner repositories and README context into reviewable project drafts, then adds only the projects you approve |
-| **Apply** | Opens a persistent Chromium window, fills the form, uploads the resume, screenshots the result, and **stops**. You review and click Submit |
-| **Track** | Stores applications, answers, statuses, events, and (optionally) IMAP messages with verification codes and reply classification |
-| **Warm path** | Reads a local `network.yml`, finds contacts at the employer, and recommends referral-first vs. cold channel without changing the stored fit score |
-| **Answer bank** | `/answers` lets you edit reusable screening answers; overrides match question substrings and sensitive disclosures are never guessed |
+- **Discover** jobs from Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Workday, USAJobs, NYC Open Data, and public GitHub job lists.
+- **Score** fit as skill coverage × hard-gate survival, with reasons, gaps, and a requirement table.
+- **Tailor** a one-page Typst resume from verified facts. No invented employers, dates, metrics, skills, or degrees.
+- **Apply** in a persistent Chromium window. It fills the form, screenshots it, and stops for human review.
+- **Track** applications, answers, statuses, events, and optional IMAP replies.
+- **Connect** to Claude Code, Codex, Pi, Hermes, OMP, or any MCP host through the packaged Agent Skill.
 
 ## What it does not do
 
-- No captcha solving. If a challenge appears, you solve it.
-- Unattended submission is **off by default**. A single-application, capped, opt-in mode exists behind an explicit `I UNDERSTAND THE RISK` acknowledgement; see [Risk settings](#risk-settings).
-- No bulk unattended submission, no Indeed or LinkedIn automation. Indeed and LinkedIn URLs are rejected at runtime before a browser opens.
-- No employer account creation or password storage.
-- No payments, referrals, affiliate, gifts, or enterprise multi-tenancy.
-- No cloud account, telemetry, or npm build step.
-- No automatic GitHub-to-resume import. Repository context is a draft; you review the project name, tech line, bullets, and tags before they enter the fact bank.
-- No raw GitHub API or README data is sent to an LLM. If you import bullets, they become normal profile facts; the optional cover-letter LLM then sees only the same approved facts as the rest of your resume.
+- No captcha solving, Indeed/LinkedIn automation, employer accounts, or password storage.
+- Unattended submission is off by default. Two risk-consented modes exist (`unattended_submit`, `autopilot_submit`), share a 10/day cap, and stop on captcha/2FA/account wall.
+- No invented resume content.
+- No cloud account, telemetry, or Node application runtime. The npx package is only an installer.
 
-## Install from GitHub (recommended)
+## Install into your agent
 
-Requires Python 3.11+ and Typst 0.14+.
-
-**macOS**
+Requires Python 3.11+, Typst 0.14+, and `uv` if JobForge is not installed yet.
 
 ```bash
-# 1. Install uv (Python tool runner)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+npx jobforge
+```
 
-# 2. Install Typst
-brew install typst
+From a checkout before the npm release:
 
-# 3. Install JobForge from GitHub
+```bash
+npx --yes --package ./installer jobforge
+```
+
+The wizard:
+
+1. detects your agents;
+2. shows the exact MCP config, skill directory, connection scopes, and backup paths;
+3. exports the Agent Skill and registers the MCP server;
+4. asks separately before installing Typst or optional Chromium.
+
+Supported hosts: Claude Code, Codex, Pi, Hermes, OMP, and generic MCP. No JobForge model provider is required; the host agent supplies the model.
+
+First run can import a resume. Target roles and sources are edited in the local console.
+
+### Standalone app
+
+```bash
 uv tool install --from git+https://github.com/Taf0711/jobforge jobforge
-
-# 4. First-run setup: config, data dirs, browser
 jobforge setup
-
-# 5. Launch the dashboard
 jobforge
 ```
 
-**Linux**: install uv with the same command, install Typst from
-<https://typst.app/docs/guides/installation/>, then run the same
-`uv tool install` and `jobforge setup` commands. Playwright may ask for system
-libraries on a minimal distro (`playwright install-deps chromium`).
+Open <http://127.0.0.1:8765>. Windows installs are supported, but native Windows browser/locking behavior is not yet an independently tested gate.
 
-**Windows**: install uv with
-`powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`, install Typst with
-`winget install Typst.Typst`, then run the same `uv tool install` and
-`jobforge setup` commands from PowerShell.
-
-If you are installing from a private fork, authenticate first (`gh auth login` and
-`gh auth setup-git`) or use the SSH URL:
+## Use
 
 ```bash
-uv tool install --from git+ssh://git@github.com/Taf0711/jobforge.git jobforge
+npx jobforge                          # install into local agents
+jobforge app                          # open the console
+jobforge scan                         # discover jobs
+jobforge score                        # score unscored jobs
+jobforge tailor --job 42              # build a resume
+jobforge apply --job 42               # fill + review; never submit
+jobforge autopilot run --limit 5      # sequential, risk-gated pass
+jobforge queue build --limit 10       # supervised queue
+jobforge providers list               # optional, for the built-in agent
+jobforge agent "Find my best matches" # built-in agent, optional
 ```
 
-For a reproducible release, pin the tag:
+After installing the skill, restart your agent and ask:
 
-```bash
-uv tool install --from "git+https://github.com/Taf0711/jobforge@v0.4.2" jobforge
+> Use JobForge to find my best matches.
+
+## How it works
+
+```text
+public ATS APIs / job pages
+  → jobs + matches (SQLite)
+  → verified profile facts
+  → one-page Typst resume + ATS check
+  → browser fill + screenshot
+  → human review and Submit
 ```
 
-`jobforge setup` writes config, data, output, and browser state under a per-user
-app home, not into the Python installation:
+Artifacts are stored under `output/profile-<profile-id>/...`. Queue items and approved operations execute under the profile that created them, even if another profile is active.
 
-| Platform | Location |
-|---|---|
-| macOS | `~/Library/Application Support/JobForge` |
-| Linux | `~/.local/share/jobforge` |
-| Windows | `%APPDATA%\JobForge` |
-| override | `JOBFORGE_HOME` |
-
-Check the install with `jobforge doctor`. Update with
-`uv tool install --force --from git+https://github.com/Taf0711/jobforge jobforge`.
-
-## Quick start from a checkout
-
-Requires Python 3.11+ and Typst 0.14+.
-
-```bash
-cd /path/to/jobforge
-make bootstrap            # venv + deps + Chromium
-cp config.example.yml config.yml
-# edit config.yml: add board slugs, your resume path, preferences
-.venv/bin/python -m jobforge init
-.venv/bin/python -m jobforge import-profile --file /path/to/resume.pdf
-.venv/bin/python -m jobforge scan
-.venv/bin/python -m jobforge score
-.venv/bin/python -m jobforge serve
-```
-
-Open <http://127.0.0.1:8765>. In a checkout, the launcher is also available:
-
-```bash
-uv tool install --from . jobforge
-jobforge app
-```
-
-### First-run setup wizard
-
-The first empty launch redirects to `/setup`, a four-step local wizard:
-
-1. **Profile** — use the existing profile or upload a resume/profile file.
-2. **Targets** — titles, locations, work modes, experience, salary, match floor,
-   sponsorship/relocation.
-3. **Sources** — curated direct-ATS/public-sector presets plus custom boards.
-4. **Ready** — profile/sources/GitHub/Typst/browser checklist, then finish or skip.
-
-No account, email capture, or telemetry. You can skip and return from the
-**Setup** link; preferences and profile stay editable in Settings/Profiles.
-
-### First useful run
-
-1. `import-profile` parses the resume into contact, experience, education, projects, skills, and a fact bank.
-2. Add target boards in the Setup wizard or `config.yml`. Examples:
-   - Greenhouse: `stripe`, `discord`, `figma`
-   - Lever: `leverdemo`, `spotify`
-   - Ashby: `linear`, `ramp`
-   - Workable: `seedlegals`
-   - SmartRecruiters: `Ubisoft`
-3. `scan` fetches and deduplicates jobs by fingerprint.
-4. `score` fills the match table. The dashboard's **Run scan** scores newly
-   discovered jobs automatically; the CLI keeps `scan` and `score` separate.
-5. Optional: open **Connections** → **GitHub**, connect a read-only token, and
-   turn the relevant repositories into reviewed project drafts.
-6. Open a job → **Tailor resume** → **Fill application**.
-
-### Already using resume-forge?
-
-Import the verified profile, project bank, evidence matrix, network, and tracker
-instead of re-parsing a PDF:
-
-```bash
-jobforge import-resume-forge \
-  --profile  /path/to/profile.yml \
-  --projects /path/to/projects.yml \
-  --evidence /path/to/evidence_matrix.yml \
-  --network  /path/to/network.yml \
-  --archetypes /path/to/role_archetypes.yml \
-  --applications /path/to/applications.yml \
-  --resume   /path/to/base_resume.pdf
-```
-
-See `docs/16-resume-forge.md` for the mapping and status conversion.
-
-### GitHub connections
-
-Open **Connections** after setup. JobForge uses a read-only personal access
-token (not an OAuth login), so there is no bundled client secret and no callback
-server.
-
-1. Create a fine-grained token with **Contents: read** and **Metadata: read** for
-   public repositories, or for selected private repositories.
-2. Paste it at `/connections`. It is stored in the OS keychain when available;
-   otherwise JobForge writes a `0600` file and says so. You can instead run with
-   `GITHUB_TOKEN` or `JOBFORGE_GITHUB_TOKEN` set and store no copy.
-3. Sync owner repositories, open one, and review the README-derived suggestions.
-4. Edit the project name, tech line, bullets, and tags. Submit the form to add it
-   to the project bank. JobForge optionally adds detected skills and rescores
-   jobs.
-5. The normal resume renderer picks the three most JD-relevant live projects.
-   Syncing alone never changes the resume.
-
-Disconnecting removes the token and cached repository metadata; imported
-projects stay. Full details and limitations: `docs/20-connections.md`.
+The quality gate blocks below-threshold, duplicate-company, already-submitted, missing-resume, and captcha-stuck jobs before a browser opens.
 
 ## Commands
 
-```bash
-jobforge app              # start the dashboard and open it
-jobforge setup            # first-run config + browser
-jobforge doctor           # check paths, Typst, and browser
-jobforge init
-jobforge import-profile --file resume.pdf
-jobforge import-resume-forge --profile profile.yml --projects projects.yml
-jobforge scan
-jobforge scan --source greenhouse --board stripe
-jobforge scan --url https://jobs.lever.co/acme/123
-jobforge score
-jobforge jobs --min-score 60 --limit 20
-jobforge tailor --job 42
-jobforge apply --job 42
-jobforge apply --job 42 --hold 600        # non-interactive: keep browser open 10 min
-jobforge serve
-jobforge email poll
-jobforge code --company "Acme" --timeout 120   # redacted; add --reveal-code to print it
-jobforge export
-jobforge audit
-python -m jobforge.audit.adapter_eval --all --json   # deterministic ATS fixture eval
-python scripts/e2e_smoke.py --json                   # offline end-to-end smoke
-python scripts/smoke_live_ats.py --json              # live, non-submitting ATS smoke
-jobforge risk status                       # risky modes are off by default
-jobforge queue build --limit 10            # ranked supervised queue
-jobforge queue prepare
-jobforge queue apply
-jobforge status
-```
-
-`apply` opens a headed browser. Review the fields, solve any captcha yourself, and click Submit. Close the browser when done; the CLI records what was filled.
-
-The `adapter_eval`, `e2e_smoke`, and `smoke_live_ats` gates are developer-only and require a source checkout. The live smoke fills the public Lever demo form with synthetic data and **never clicks Submit**.
-
-Workday is supervised on purpose: if the page shows an account wall or password field and no application form, the adapter stops and hands the browser to you. It never creates an employer account or stores a password.
+| Command | Purpose |
+|---|---|
+| `npx jobforge` | Install the MCP server and skill into local agents |
+| `jobforge install plan --hosts claude_code,pi` | Show the install plan without writing |
+| `jobforge install doctor --hosts ...` | Verify connections, skills, and config entries |
+| `jobforge app` | Start the local console |
+| `jobforge scan` / `score` | Discover and score jobs |
+| `jobforge tailor --job 42` | Generate a tailored resume |
+| `jobforge apply --job 42` | Fill an application in review mode |
+| `jobforge queue ...` | Build, prepare, and review the supervised queue |
+| `jobforge autopilot run` | Sequential risk-consented pass |
+| `jobforge risk status` | Show consent and daily usage |
+| `jobforge export` | Export local data |
 
 ## Configuration
 
-`config.yml` (gitignored) controls paths, sources, seeded preferences, LLM, IMAP, and the browser.
+`config.yml` controls sources, paths, preferences, browser behavior, and the active optional provider. Provider keys never go in `config.yml`; they use the OS keychain, a `0600` fallback, or environment variables.
 
-`scan.keywords` and `scan.exclude_keywords` gate job titles before insertion;
-`scan.max_new` caps new rows per scan (deferred rows are picked up by later
-scans). USAJobs is dormant until `USAJOBS_API_KEY` and `USAJOBS_EMAIL` are set.
+Feature flags: `setup_wizard`, `github_connections`, `scoring_v2`, `agent`, `agent_integrations`. See `docs/21-feature-flags.md`.
 
-Provider secrets are never written to `config.yml`. LLM and IMAP credentials
-come from environment variables; the GitHub token uses the OS keychain, a
-`0600` local fallback, or an environment variable:
+## Docs
 
-```bash
-export JOBFORGE_LLM_API_KEY=...        # optional, OpenAI-compatible endpoint
-export JOBFORGE_LLM_BASE_URL=http://localhost:11434/v1
-export JOBFORGE_LLM_MODEL=llama3.1:8b
-export JOBFORGE_IMAP_PASSWORD=...      # optional, app password
-export GITHUB_TOKEN=...                # optional; preferred over storing a copy
-# or: export JOBFORGE_GITHUB_TOKEN=...
-```
-
-The app works with no LLM: tailoring falls back to deterministic selection and a template cover letter. With a local Ollama endpoint, no profile data leaves the machine.
-
-**Warm path:** copy `network.example.yml` to `network.yml` (gitignored) and list people you actually know. The job detail page then shows the warm score, the recommended channel (`referral_first`, `warm_intro`, `cold_with_warm_fallback`, `cold_only`), and a display-only fit adjustment. The stored match score is never overwritten.
-
-**Answer bank:** edit overrides at `/answers` or in `data/answers.json`. Keys are case-insensitive substrings of the application question. Voluntary disclosures (veteran, disability, gender, race, orientation) are only filled from explicit profile values; otherwise the browser leaves them for you.
-
-## Risk settings
-
-All risky modes are off by default. `/settings/risk` and `jobforge risk status` show the exact warnings and the current usage.
-
-```bash
-jobforge risk enable --flag unattended_submit \
-  --acknowledge "I UNDERSTAND THE RISK"
-```
-
-That enables a **single-application** unattended submit, capped at 10 per UTC day. The daily slot is reserved atomically before the browser opens. It still stops on a captcha. Captcha solving, bulk unattended submission, Indeed/LinkedIn automation, and employer account creation are deliberately unavailable. Full disclosure: `docs/13-risk-consent.md`.
-
-## Queue and quality gate
-
-The read-only `/queue` dashboard shows ranked items, preparation status, and quality notes. The CLI equivalents are `jobforge queue build`, `queue next`, `queue prepare`, and `queue apply`. The default apply path forces review mode and asks whether you submitted; `--auto` is only the risk-consented single-application path.
-
-The quality gate is enforced wherever a browser can open: job detail disables Fill, the web apply route refuses a blocked job, the CLI runs a preflight, and the queue raises `QualityBlocked` before the browser starts. Blockers include below-threshold match, zero gate survival, duplicate-company, already-submitted status, missing resume, and a recorded captcha handoff. Details: `docs/12-quality.md`.
-
-## How matching works
-
-```
-JD → requirements (must / nice) → skill coverage with partial credit
-                                  × hard gates:
-                                    years, degree, clearance, sponsorship,
-                                    location, title level, salary floor
-                                  × thin-JD penalty
-= 0–100 fit score
-```
-
-- A direct skill is 1.0.
-- An adjacent skill gets partial credit from `jobforge/matching/skill_graph.yml` (e.g. Go from C++ = 0.5).
-- Unparseable prose requirements get neutral 0.6 credit; responsibilities are not counted.
-- A clearance requirement is a near-knockout unless you are clearance-eligible (0.35 survival) or already cleared.
-- A senior title against an entry-level target caps the gate at 0.6.
-- A JD with no parseable skills is capped at half score and flagged.
-
-Every score stores its reasons, gaps, and requirement table, so you can see why a job ranked where it did.
-
-### Fit vs. Pursuit
-
-- **Fit** = skill coverage × gate survival. It never moves for compensation or location convenience.
-- **Pursuit** = Fit + NYC compensation-policy modifier + relocation cost-of-living modifier.
-
-NYC uses a $130k target floor and a $105k exception floor; below $105k is a skip. A $105–130k role is only `exception_ok` when the channel is warm or callback odds clear 25%. Relocating to a high-COL metro with thin comp is penalized; a low-COL metro is rewarded. The match row stores both numbers and the comp verdict.
-
-## Resume safety
-
-- Tailoring selects and reorders **facts from your resume**. It does not invent employers, dates, metrics, or skills.
-- The tailored resume uses verified bullets and the resume-forge layout without an LLM-written summary. Optional cover letters pass the same number/skill grounding check; unsupported text falls back to the deterministic letter.
-- The generated PDF is checked for one page, a text layer, contact details, section headers, images, and encoding damage.
-- You still read the PDF before sending it. The check is a floor, not a guarantee.
-
-## Project layout
-
-```
-jobforge/
-  paths.py       source-checkout vs. installed app-home paths
-  sources/       ATS discovery adapters + direct URL fetch
-  integrations/  resume-forge import + GitHub connection/project context
-  matching/      resume parse, JD parse, skill graph, score
-  tailoring/     fact selection, LLM grounding, Typst render, ATS check
-  automation/    browser session, generic filler, ATS adapters, answer bank
-  networking/    local referral graph, warm-path score, channel routing
-  queue.py       supervised application queue (human submit by default)
-  quality.py     pre-submit quality gate (score, blockers, warnings)
-  risk.py        explicit opt-in risk policy, daily cap, consent record
-  email/         IMAP poller, verification codes, reply classification, code bridge
-  web/           FastAPI dashboard, answers editor, risk settings, connections, templates
-  audit/         parity and static security checks
-  data/          packaged config example
-pyproject.toml   installable package + `jobforge` entry point
-scripts/         install.sh and offline e2e smoke
-config.example.yml
-network.example.yml
-docs/
-  03-architecture.md   module map, data flow, trust boundaries
-  05-warm-path.md      referral graph and channel routing
-  06-code-bridge.md    verification-code bridge
-  07-answer-bank.md    reusable screening answers
-  08-adapter-eval.md   deterministic ATS fixtures
-  09-workday.md        Workday discovery and supervised adapter
-  10-e2e.md            offline end-to-end smoke
-  11-queue.md          supervised application queue
-  12-quality.md        pre-submit quality gate
-  13-risk-consent.md   explicit opt-in risk policy
-  15-packaging.md      install, app home, release build
-  16-resume-forge.md   import the personal verified profile/projects/tracker
-  18-source-presets.md  reference direct-ATS board/scan preset
-  19-onboarding.md     first-run wizard and competitor patterns
-  20-connections.md    GitHub token, repository context, review gate, limits
-```
+- `docs/03-architecture.md` — modules, data flow, trust boundaries
+- `docs/11-queue.md` — supervised queue
+- `docs/12-quality.md` — pre-submit gate
+- `docs/13-risk-consent.md` — unattended submit policy
+- `docs/23-agent.md` — built-in agent
+- `docs/24-providers.md` — model providers
+- `docs/33-workbench-p1.md` — MCP read tools
+- `docs/34-mcp.md` — MCP setup
+- `docs/35-jobforge-skill.md` — Agent Skill
+- `docs/37-agent-memory-and-resume.md` — memory and approved resume requests
+- `docs/38-skill-install.md` — npx/TUI installer
 
 ## Tests
 
 ```bash
-make test        # pytest
-make audit       # parity + security
-make eval        # 6 fixture-driven ATS adapters
-make e2e         # offline FastAPI + Typst smoke
+make test       # pytest
+make audit      # parity + security
+make decisions  # 14 frozen decision cases
+make e2e        # offline FastAPI + Typst smoke
 ```
 
-The test suite covers DB CRUD/dedup/events, salary and HTML normalization, ATS detection, resume parsing, JD section parsing, skill extraction, partial credit, hard gates, title penalties, thin-JD caps, Typst render, blocking ATS checks, web page rendering, SSRF rejection, the security scan, warm-path routing, the verification-code bridge, the answers editor, Workday parsing/account-wall/pagination, the supervised queue, the quality gate, risk consent and the unattended-submit cap, re-tailor state preservation, grounded letters, upload targeting, auto-submit confirmation, packaging paths, the launcher, GitHub token storage/README suggestions/project import and disconnect, and the six-fixture adapter eval.
+Dependencies are pinned in `requirements.lock`. CI runs `test`, `audit`, `decisions`, and `e2e`; the live ATS smoke is manual and never submits.
 
-Deterministic gates:
+## Legal
 
-```bash
-make test    # pytest
-make audit   # parity + static security
-make eval    # offline ATS fixture eval; JSON; non-zero on drift
-make e2e     # real FastAPI app + temp DB + Typst; JSON; non-zero on failure
-make smoke   # live Lever demo fill; network; no submit; manual release gate
-```
+Uses public ATS APIs and public job pages only. Automated form filling may still violate an employer or ATS's terms; keep the human review/submit gate.
 
-Dependencies are pinned in `requirements.lock` (regenerate with `make lock`).
-GitHub Actions runs `test`, `audit`, `eval`, and `e2e` on every push and pull
-request; the live smoke stays manual because it uses a public external form.
-
-## Legal and platform notes
-
-- Uses public ATS board APIs and public job pages only.
-- Respects per-host rate limits with backoff.
-- Does not call the paid service's authenticated API or copy its content.
-- Automated form filling may still violate an employer's or ATS's terms. The human review/submit gate is deliberate; keep it.
-- Never use this to misrepresent your identity or qualifications.
-
-## License
-
-MIT for the code in this repository. Third-party ATS data remains subject to the employer's terms. "Jobbie" is a trademark of its owner; this project is not affiliated with it.
+MIT for the code. Third-party ATS data remains subject to the employer's terms. “Jobbie” is a trademark of its owner; this project is not affiliated with it.

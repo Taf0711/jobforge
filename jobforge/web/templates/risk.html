@@ -9,37 +9,41 @@
   <a class="button" href="/settings">Back to settings</a>
 </section>
 
+{% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+
+{% for flag in risk.available %}
 <section class="panel">
   <div class="panel-head">
-    <h2>Unattended submit</h2>
-    <span class="pill {{ 'bad' if risk.policy.unattended_submit else '' }}">
-      {{ 'ENABLED' if risk.policy.unattended_submit else 'OFF (default)' }}
+    <h2>{{ flag.replace('_', ' ')|title }}</h2>
+    <span class="pill {{ 'bad' if risk.policy[flag] else '' }}">
+      {{ 'ENABLED' if risk.policy[flag] else 'OFF (default)' }}
     </span>
   </div>
-  <pre class="jd" style="max-height:none">{{ risk.warnings['unattended_submit'] }}</pre>
+  <pre class="jd" style="max-height:none">{{ risk.warnings[flag] }}</pre>
   <p class="muted">
-    Usage today: <strong>{{ risk.usage.count }}</strong> / {{ risk.policy.daily_submit_cap }}.
+    Shared usage today: <strong>{{ risk.usage.count }}</strong> / {{ risk.policy.daily_submit_cap }}.
     {% if risk.policy.consented_at %}Consent recorded {{ risk.policy.consented_at }}.{% endif %}
   </p>
 
-  {% if not risk.policy.unattended_submit %}
+  {% if not risk.policy[flag] %}
   <form method="post" action="/settings/risk" class="stack">
     <input type="hidden" name="action" value="enable">
-    <input type="hidden" name="flag" value="unattended_submit">
+    <input type="hidden" name="flag" value="{{ flag }}">
     <label>
       <span>Type <code>{{ risk.consent_phrase }}</code> to confirm</span>
       <input name="acknowledge" autocomplete="off" required>
     </label>
-    <button class="primary">Enable unattended submit</button>
+    <button class="primary">Enable {{ flag.replace('_', ' ') }}</button>
   </form>
   {% else %}
   <form method="post" action="/settings/risk" class="stack">
     <input type="hidden" name="action" value="disable">
-    <input type="hidden" name="flag" value="unattended_submit">
-    <button>Disable unattended submit</button>
+    <input type="hidden" name="flag" value="{{ flag }}">
+    <button>Disable {{ flag.replace('_', ' ') }}</button>
   </form>
   {% endif %}
 </section>
+{% endfor %}
 
 <section class="panel">
   <div class="panel-head"><h2>Not available</h2><span class="muted">manual only</span></div>

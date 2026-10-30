@@ -157,6 +157,8 @@ def test_load_profile_maps_verified_data(tmp_path: Path):
     assert len(profile.facts) == 5
     assert {"Python", "Go", "FastAPI", "React", "Docker", "Rust"} <= set(profile.skills)
     assert profile.facts[0]["id"].startswith("rf-exp-")
+    assert profile.evidence["skills"]["languages"]["Python"] == {}
+    assert profile.context["resume_forge"]["scoring_inputs"]["gpa_for_scoring"] == 3.03
 
 
 def test_preferences_and_network_mapping(tmp_path: Path):
@@ -199,6 +201,9 @@ def test_import_applications_creates_tracker_rows(tmp_path: Path):
     counts = import_applications(conn, profile_id, path)
     rows = conn.execute("SELECT status, notes FROM applications").fetchall()
     jobs = conn.execute("SELECT company, title FROM jobs").fetchall()
+    live_jobs = db.list_jobs(conn, profile_id)
+    historical_jobs = db.list_jobs(conn, profile_id, source="resume-forge")
+    live_count = db.count_jobs(conn, profile_id)
     conn.close()
 
     assert counts == {"imported": 1, "skipped": 0}
@@ -206,6 +211,9 @@ def test_import_applications_creates_tracker_rows(tmp_path: Path):
     assert "cold_portal" in rows[0]["notes"]
     assert jobs[0]["company"] == "Acme"
     assert load_applications(path)[0]["status"] == "submitted"
+    assert live_jobs == []
+    assert len(historical_jobs) == 1
+    assert live_count == 0
 
 
 def test_cli_import_resume_forge_writes_profile_and_network(tmp_path: Path):

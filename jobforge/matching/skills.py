@@ -138,9 +138,14 @@ def coverage(
     profile_skills: Iterable[str],
     graph: SkillGraph,
     evidence: dict[str, float] | None = None,
+    *,
+    prose_credit: float = 0.60,
+    evidence_direct: bool = False,
 ) -> CoverageResult:
     owned = {canonical(s) for s in profile_skills if s}
-    evidence = evidence or {}
+    # Evidence may use an alias (for example "cpp" for "C++"). Normalize keys
+    # so direct and transfer-credit discounts agree on the source skill.
+    evidence = {canonical(key): value for key, value in (evidence or {}).items() if key}
     rows: list[CoverageRow] = []
     total_weight = 0.0
     total_credit = 0.0
@@ -161,13 +166,23 @@ def coverage(
             seen.add(key)
         weight = 1.0 if importance == "must" else 0.4
         if not skill:
-            # No identifiable skill: neutral partial credit so the score is not
-            # silently inflated or destroyed by unparseable prose.
-            credit, matched_by = 0.60, "unparsed"
+            # Unparseable prose is reported in the table but cannot be verified
+            # against the profile. New scoring gives it no positive credit; the
+            # legacy path keeps the old neutral-credit calibration.
+            credit, matched_by = max(0.0, min(1.0, prose_credit)), "unparsed"
         else:
             credit, matched_by = graph.partial_credit(skill, owned)
-            if matched_by != "direct" and credit > 0 and skill in evidence:
-                credit *= max(0.0, min(1.0, evidence[skill]))
+            # Direct credit is discounted only in evidence-aware scoring;
+            # transfer credit is always discounted by the evidence behind the
+            # skill that earned it. Otherwise an adjacent skill with weak
+            # evidence can outrank the directly named skill.
+            evidence_skill = skill
+            if matched_by.startswith(("adjacent:", "edge:")):
+                evidence_skill = matched_by.split(":", 1)[1]
+            if credit > 0 and (matched_by != "direct" or evidence_direct):
+                source_evidence = evidence.get(evidence_skill)
+                if source_evidence is not None:
+                    credit *= max(0.0, min(1.0, source_evidence))
             if credit == 0 and skill in owned:
                 credit = 1.0
         total_weight += weight

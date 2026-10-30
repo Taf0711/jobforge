@@ -3,9 +3,9 @@
 {% block content %}
 <section class="page-head">
   <div>
-    <p class="eyebrow">First run · about 2 minutes</p>
+    <p class="eyebrow">First run · about 90 seconds</p>
     <h1>Set up JobForge</h1>
-    <p class="muted">Local-first, no account. Bring a resume, choose targets, and pick the public sources you want to scan.</p>
+    <p class="muted">Add your resume, confirm what you want, and start. Everything else has a sensible default and stays editable.</p>
   </div>
   <div class="actions">
     <form method="post" action="/setup/skip"><button class="ghost">Skip setup</button></form>
@@ -13,162 +13,174 @@
 </section>
 
 <nav class="setup-progress" aria-label="Setup steps">
-  <a href="/setup?step=1"><div class="setup-step {{ 'active' if step == 1 else ('done' if step > 1 else '') }}"><strong>1 · Profile</strong><span>Resume or existing profile</span></div></a>
-  <a href="/setup?step=2"><div class="setup-step {{ 'active' if step == 2 else ('done' if step > 2 else '') }}"><strong>2 · Targets</strong><span>Titles, locations, gates</span></div></a>
-  <a href="/setup?step=3"><div class="setup-step {{ 'active' if step == 3 else ('done' if step > 3 else '') }}"><strong>3 · Sources</strong><span>Direct boards and public sector</span></div></a>
-  <a href="/setup?step=4"><div class="setup-step {{ 'active' if step == 4 else '' }}"><strong>4 · Ready</strong><span>Check and finish</span></div></a>
+  <a href="/setup?step=1"><div class="setup-step {{ 'active' if step == 1 else ('done' if step > 1 else '') }}"><strong>1 · Resume</strong><span>Upload once</span></div></a>
+  <a href="/setup?step=2"><div class="setup-step {{ 'active' if step == 2 else ('done' if step > 2 else '') }}"><strong>2 · Targets</strong><span>Titles, places, source mix</span></div></a>
+  <a href="/setup?step=3"><div class="setup-step {{ 'active' if step == 3 else '' }}"><strong>3 · Start</strong><span>Review and finish</span></div></a>
 </nav>
+
+{% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
 
 {% if step == 1 %}
 <section class="grid-2">
   <div class="panel">
-    <div class="panel-head"><h2>Current profile</h2><span class="pill">{{ profile.name }}</span></div>
+    <div class="panel-head"><h2>Your profile</h2><span class="pill">{{ profile.name }}</span></div>
     {% if setup_state.has_profile %}
       <p><strong>{{ profile.full_name or 'No name parsed' }}</strong><br>
         <span class="muted">{{ profile.email or 'No email' }}{% if profile.phone %} · {{ profile.phone }}{% endif %}{% if profile.location %} · {{ profile.location }}{% endif %}</span>
       </p>
       <p class="muted">{{ profile.experience|length }} experience entr{{ 'y' if profile.experience|length == 1 else 'ies' }} · {{ profile.projects|length }} project{{ 's' if profile.projects|length != 1 else '' }} · {{ profile.skills|length }} skills · {{ profile.facts|length }} facts</p>
-      {% if profile.resume_path %}<p class="muted">Resume: <code>{{ profile.resume_path|short(100) }}</code></p>{% endif %}
+      <p><span class="pill">ready</span> This is what the scorer and tailor will use.</p>
     {% else %}
-      <p class="muted">No parsed profile yet. Upload a resume or a YAML/JSON profile to prefill contact details, experience, projects, skills, and the fact bank.</p>
-      <p><span class="pill">recommended</span> A resume gives the scorer and tailor the facts they need.</p>
+      <p class="muted">No resume parsed yet. Upload one and JobForge will extract contact details, experience, projects, skills, and a fact bank locally.</p>
+      <p><span class="pill">recommended</span> A resume is the only thing the scorer and tailor really need.</p>
     {% endif %}
-    <p class="muted">You can review or replace the profile later on the <a href="/profiles">Profiles</a> page.</p>
+    <p class="muted">You can replace or edit it later on the <a href="/profiles">Profiles</a> page.</p>
+    <details>
+      <summary class="muted">Already using resume-forge?</summary>
+      <p class="muted">Import the verified profile, projects, evidence, network, and tracker with <code>jobforge import-resume-forge --help</code>.</p>
+    </details>
   </div>
 
   <div class="panel">
-    <div class="panel-head"><h2>Import a resume</h2></div>
+    <div class="panel-head"><h2>Upload a resume</h2></div>
     <form method="post" action="/setup/profile" enctype="multipart/form-data" class="stack">
       <label>Resume or profile file
-        <input type="file" name="file" accept=".pdf,.docx,.txt,.md,.yaml,.yml,.json">
+        <input type="file" name="file" accept=".pdf,.docx,.txt,.md,.yaml,.yml,.json" required>
       </label>
-      <p class="setup-note">PDF, DOCX, TXT, MD, YAML, or JSON · 10 MB max · parsing is heuristic, so review the result before applying.</p>
+      <p class="setup-note">PDF, DOCX, TXT, MD, YAML, or JSON · 10 MB max. Parsing is heuristic; review the result before applying.</p>
       <div class="setup-actions">
         <button class="primary" name="action" value="upload">Upload and continue</button>
-        <button name="action" value="skip">Use existing / skip for now</button>
+        <button name="action" value="skip">Skip / use existing</button>
       </div>
     </form>
-    <p class="muted">Already using resume-forge? Import the verified profile, projects, evidence, and tracker with the CLI: <code>jobforge import-resume-forge --help</code>.</p>
-    <p class="muted">Optional: <a href="/connections">connect GitHub</a> to pull repository context into reviewable project drafts. You can do this now or after setup.</p>
+    {% if features.github_connections %}
+    <p class="muted">Optional: <a href="/connections">connect GitHub</a> later to draft projects from your repositories.</p>
+    {% endif %}
   </div>
 </section>
 
 {% elif step == 2 %}
 <section class="panel">
-  <div class="panel-head"><h2>What are you looking for?</h2><span class="pill">editable later</span></div>
+  <div class="panel-head"><h2>What should JobForge look for?</h2><span class="pill">two fields + defaults</span></div>
   <form method="post" action="/setup/preferences" class="stack">
-    <label>Target titles <span class="muted">(comma-separated, max 5)</span>
-      <input name="titles" value="{{ prefs.titles|join(', ') }}" placeholder="Software Engineer, Backend Engineer, Data Engineer">
-    </label>
-    <label>Locations <span class="muted">(semicolon-separated)</span>
-      <input name="locations" value="{{ prefs.locations|join('; ') }}" placeholder="New York, NY; Remote">
-    </label>
     <div class="row">
-      <label>Work modes <input name="work_modes" value="{{ prefs.work_modes|join(', ') }}" placeholder="remote, hybrid, onsite"></label>
-      <label>Employment types <input name="employment_types" value="{{ prefs.employment_types|join(', ') }}" placeholder="full-time, contract"></label>
+      <label>Target titles <span class="muted">(comma-separated, max 5)</span>
+        <input name="titles" value="{{ default_titles|join(', ') }}" placeholder="Software Engineer, Backend Engineer" autofocus>
+      </label>
+      <label>Locations <span class="muted">(semicolon-separated)</span>
+        <input name="locations" value="{{ default_locations|join('; ') }}" placeholder="New York, NY; Remote">
+      </label>
     </div>
+
     <div class="row">
-      <label>Experience levels <input name="experience_levels" value="{{ prefs.experience_levels|join(', ') }}" placeholder="entry, junior, mid"></label>
-      <label>Minimum salary (USD) <input type="number" name="salary_min" value="{{ prefs.salary_min }}" min="0" step="1000"></label>
+      <label>Where to look
+        <select name="source_mix">
+          <option value="recommended" {{ 'selected' if source_mix == 'recommended' else '' }}>Recommended — AI, product, GitHub lists</option>
+          <option value="broad" {{ 'selected' if source_mix == 'broad' else '' }}>Broad — adds fintech and public sector</option>
+          <option value="minimal" {{ 'selected' if source_mix == 'minimal' else '' }}>Minimal — GitHub lists only</option>
+          {% if source_count %}<option value="keep" {{ 'selected' if source_mix == 'keep' else '' }}>Keep my current sources</option>{% endif %}
+        </select>
+      </label>
+      <div></div>
     </div>
-    <div class="row">
-      <label>Minimum match <input type="number" name="min_match" value="{{ prefs.min_match }}" min="0" max="100"></label>
-      <div>
-        <label class="check"><input type="checkbox" name="needs_sponsorship" value="1" {{ 'checked' if prefs.needs_sponsorship else '' }}> I need visa sponsorship</label>
-        <label class="check"><input type="checkbox" name="open_to_relocation" value="1" {{ 'checked' if prefs.open_to_relocation else '' }}> Open to relocation</label>
-      </div>
-    </div>
+
     <details>
-      <summary class="muted">Advanced filters</summary>
+      <summary class="muted">Advanced filters and custom boards</summary>
       <div class="stack" style="margin-top: 12px;">
+        <div class="row">
+          <label>Work modes <input name="work_modes" value="{{ prefs.work_modes|join(', ') }}" placeholder="remote, hybrid, onsite"></label>
+          <label>Employment types <input name="employment_types" value="{{ prefs.employment_types|join(', ') }}" placeholder="full-time, contract"></label>
+        </div>
+        <div class="row">
+          <label>Experience levels <input name="experience_levels" value="{{ prefs.experience_levels|join(', ') }}" placeholder="entry, junior, mid"></label>
+          <label>Minimum salary (USD) <input type="number" name="salary_min" value="{{ prefs.salary_min }}" min="0" step="1000"></label>
+        </div>
+        <div class="row">
+          <label>Minimum match <span class="muted">(0–100; default 45)</span>
+            <input type="number" name="min_match" value="{{ prefs.min_match or 45 }}" min="0" max="100">
+          </label>
+        </div>
+        <div>
+          <label class="check"><input type="checkbox" name="needs_sponsorship" value="1" {{ 'checked' if prefs.needs_sponsorship else '' }}> I need visa sponsorship</label>
+          <label class="check"><input type="checkbox" name="open_to_relocation" value="1" {{ 'checked' if prefs.open_to_relocation else '' }}> Open to relocation</label>
+        </div>
         <label>Excluded companies <input name="excluded_companies" value="{{ prefs.excluded_companies|join(', ') }}"></label>
         <label>Excluded keywords <input name="excluded_keywords" value="{{ prefs.excluded_keywords|join(', ') }}"></label>
         <label>Required keywords <input name="included_keywords" value="{{ prefs.included_keywords|join(', ') }}"></label>
-      </div>
-    </details>
-    <div class="setup-actions">
-      <a class="button" href="/setup?step=1">Back</a>
-      <button class="primary">Save targets and continue</button>
-      <a class="link" href="/setup?step=3">Skip for now</a>
-    </div>
-  </form>
-</section>
-
-{% elif step == 3 %}
-<section class="panel">
-  <div class="panel-head"><h2>Where should JobForge look?</h2><span class="pill">{{ source_count }} source{{ 's' if source_count != 1 else '' }} configured</span></div>
-  <p class="muted">Presets are starting points. They are public ATS boards and public-sector APIs; every lead still needs a liveness check before you apply. Indeed and LinkedIn automation are deliberately excluded.</p>
-  <form method="post" action="/setup/sources" class="stack">
-    {% for key, preset in presets.items() %}
-    <div class="setup-preset">
-      <label>
-        <input type="checkbox" name="preset_{{ key }}" value="1" {{ 'checked' if key in selected_presets else '' }}>
-        <span><strong>{{ preset.label }}</strong><span>{{ preset.description }}</span></span>
-      </label>
-    </div>
-    {% endfor %}
-    {% if not usa_jobs_key %}<p class="setup-note">USAJobs stays dormant until <code>USAJOBS_API_KEY</code> and <code>USAJOBS_EMAIL</code> are exported. NYC Open Data works without a key.</p>{% endif %}
-
-    <details>
-      <summary class="muted">Add custom boards</summary>
-      <div class="stack" style="margin-top: 12px;">
-        <label>Greenhouse board slugs <input name="greenhouse_custom" value="{{ custom.get('greenhouse', '') }}" placeholder="acme, beta"></label>
-        <label>Lever site slugs <input name="lever_custom" value="{{ custom.get('lever', '') }}" placeholder="acme"></label>
-        <label>Ashby board slugs <input name="ashby_custom" value="{{ custom.get('ashby', '') }}" placeholder="acme"></label>
-        <label>Workable board slugs <input name="workable_custom" value="{{ custom.get('workable', '') }}" placeholder="acme"></label>
+        <div class="row">
+          <label>Include title keywords <span class="muted">(empty = all)</span>
+            <input name="scan_keywords" value="{{ scan_keywords }}" placeholder="software engineer, backend">
+          </label>
+          <label>Exclude title keywords
+            <input name="scan_exclude" value="{{ scan_exclude }}" placeholder="senior, staff">
+          </label>
+        </div>
+        <label>New jobs per scan <span class="muted">(0 = unlimited)</span>
+          <input type="number" name="max_new" value="{{ max_new }}" min="0" step="50">
+        </label>
+        <p class="setup-note" style="margin-top: 8px;">Custom boards</p>
+        <div class="row">
+          <label>Greenhouse slugs <input name="greenhouse_custom" value="{{ custom.get('greenhouse', '') }}" placeholder="acme, beta"></label>
+          <label>Lever slugs <input name="lever_custom" value="{{ custom.get('lever', '') }}" placeholder="acme"></label>
+        </div>
+        <div class="row">
+          <label>Ashby slugs <input name="ashby_custom" value="{{ custom.get('ashby', '') }}" placeholder="acme"></label>
+          <label>Workable slugs <input name="workable_custom" value="{{ custom.get('workable', '') }}" placeholder="acme"></label>
+        </div>
         <label>Workday boards <input name="workday_custom" value="{{ custom.get('workday', '') }}" placeholder="acme|wd5|External or a myworkdayjobs.com board URL"></label>
         <label>SmartRecruiters companies <input name="smartrecruiters_custom" value="{{ custom.get('smartrecruiters', '') }}" placeholder="Acme"></label>
+        <label>GitHub job-list repos <input name="github_jobs_custom" value="{{ custom.get('github_jobs', '') }}" placeholder="Owner/Repo, Owner/OtherRepo"></label>
       </div>
     </details>
 
-    <div class="row">
-      <label>Include title keywords <span class="muted">(comma-separated; empty = all)</span>
-        <input name="scan_keywords" value="{{ scan_keywords }}" placeholder="software engineer, backend, data engineer">
-      </label>
-      <label>Exclude title keywords
-        <input name="scan_exclude" value="{{ scan_exclude }}" placeholder="senior, staff, principal">
-      </label>
-    </div>
-    <label>New jobs per scan <span class="muted">(0 = unlimited; deferred rows return on later scans)</span>
-      <input type="number" name="max_new" value="{{ max_new }}" min="0" step="50">
-    </label>
-
     <div class="setup-actions">
-      <a class="button" href="/setup?step=2">Back</a>
-      <button class="primary">Save sources and continue</button>
+      <a class="button" href="/setup?step=1">Back</a>
+      <button class="primary">Save and continue</button>
     </div>
   </form>
+  <p class="setup-note">Public ATS boards and public-sector APIs only. Indeed and LinkedIn automation are deliberately excluded. Defaults can be changed later in <a href="/settings">Settings</a>.</p>
 </section>
 
 {% else %}
 <section class="grid-2">
   <div class="panel">
-    <div class="panel-head"><h2>Readiness</h2></div>
+    <div class="panel-head"><h2>Ready</h2><span class="pill">last step</span></div>
     <ul class="setup-list">
-      <li><span class="setup-mark {{ 'setup-ok' if setup_state.has_profile else 'setup-warn' }}">{{ '✓' if setup_state.has_profile else '!' }}</span><span><strong>Profile</strong><br><span class="muted">{{ 'Name, resume, and facts are available.' if setup_state.has_profile else 'No parsed profile yet. Upload one on step 1, or use the Profiles page.' }}</span></span></li>
-      <li><span class="setup-mark {{ 'setup-ok' if prefs.titles else 'setup-warn' }}">{{ '✓' if prefs.titles else '!' }}</span><span><strong>Targets</strong><br><span class="muted">{{ prefs.titles|join(', ') if prefs.titles else 'No target titles yet; the scorer will still run, but the feed will be less focused.' }}</span></span></li>
-      <li><span class="setup-mark {{ 'setup-ok' if setup_state.has_sources else 'setup-warn' }}">{{ '✓' if setup_state.has_sources else '!' }}</span><span><strong>Sources</strong><br><span class="muted">{{ source_count }} source(s) configured. {{ 'You can add more later in Settings.' if source_count else 'Choose a preset or custom board on step 3.' }}</span></span></li>
-      <li><span class="setup-mark {{ 'setup-ok' if github_connected else '' }}">{{ '✓' if github_connected else '·' }}</span><span><strong>GitHub <span class="muted">(optional)</span></strong><br><span class="muted">{% if github_connected %}{{ github_repo_count }} repositories available for project drafts.{% else %}Connect GitHub to draft resume projects from your repositories. <a href="/connections">Open Connections</a>.{% endif %}</span></span></li>
-      <li><span class="setup-mark {{ 'setup-ok' if typst_ready else 'setup-warn' }}">{{ '✓' if typst_ready else '!' }}</span><span><strong>Typst</strong><br><span class="muted">{{ 'Found on PATH.' if typst_ready else 'Missing. Install Typst before tailoring; scanning and scoring still work.' }}</span></span></li>
-      <li><span class="setup-mark {{ 'setup-ok' if browser_ready else 'setup-warn' }}">{{ '✓' if browser_ready else '!' }}</span><span><strong>Browser</strong><br><span class="muted">{{ 'Chromium/Chrome detected.' if browser_ready else 'Not detected. Run jobforge setup or install Chrome before filling applications.' }}</span></span></li>
+      <li><span class="setup-mark {{ 'setup-ok' if setup_state.has_profile else 'setup-warn' }}">{{ '✓' if setup_state.has_profile else '!' }}</span><span><strong>Resume</strong><br><span class="muted">{{ profile.full_name if setup_state.has_profile else 'No parsed profile yet.' }}</span></span></li>
+      <li><span class="setup-mark {{ 'setup-ok' if prefs.titles else 'setup-warn' }}">{{ '✓' if prefs.titles else '!' }}</span><span><strong>Targets</strong><br><span class="muted">{{ prefs.titles|join(', ') if prefs.titles else 'No target titles; the feed will be broad.' }}</span></span></li>
+      <li><span class="setup-mark {{ 'setup-ok' if setup_state.has_sources else 'setup-warn' }}">{{ '✓' if setup_state.has_sources else '!' }}</span><span><strong>Sources</strong><br><span class="muted">{{ source_count }} board(s) configured.{% if not setup_state.has_sources %} The recommended mix will be applied when you finish.{% endif %}</span></span></li>
+      {% if features.agent %}
+      <li><span class="setup-mark {{ 'setup-ok' if agent_ready else '' }}">{{ '✓' if agent_ready else '·' }}</span><span><strong>Model <span class="muted">(optional)</span></strong><br><span class="muted">{% if agent_ready %}{{ active_provider }} · {{ active_model }}{% else %}Not connected. The workbench works without it; add one from <a href="/providers">Models</a> when you want the agent.{% endif %}</span></span></li>
+      {% endif %}
     </ul>
+    {% if not typst_ready or not browser_ready %}
+    <p class="setup-note">
+      {% if not typst_ready %}Typst is missing; install it before tailoring.{% endif %}
+      {% if not browser_ready %} Chrome/Chromium was not detected; install it before the fill browser.{% endif %}
+    </p>
+    {% else %}
+    <p class="setup-note">Typst and Chrome/Chromium are ready.</p>
+    {% endif %}
     <div class="setup-actions">
-      <a class="button" href="/setup?step=3">Back</a>
+      <a class="button" href="/setup?step=2">Back</a>
       <form method="post" action="/setup/finish"><button class="primary">Finish and open dashboard</button></form>
     </div>
-    <p class="setup-note">The first scan can take about a minute on a broad preset. It runs from the dashboard button after setup.</p>
+    <p class="setup-note">No account, no telemetry, no captcha solving, and no auto-submit.</p>
   </div>
 
   <div class="panel">
     <div class="panel-head"><h2>What happens next</h2></div>
     <ol class="muted">
-      <li><strong>Scan</strong> pulls public board postings, deduplicates them, and applies your title gate.</li>
-      <li><strong>Score</strong> ranks matches with reasons, gaps, and hard-gate survival.</li>
-      <li><strong>Tailor</strong> selects verified resume facts and renders a one-page PDF.</li>
-      <li><strong>Fill</strong> opens your browser. Review every field and click Submit yourself.</li>
+      <li><strong>Scan</strong> pulls public postings and applies your title gate.</li>
+      <li><strong>Score</strong> ranks matches with reasons and gaps.</li>
+      <li><strong>Tailor</strong> renders a one-page PDF from verified facts.</li>
+      {% if features.agent %}<li><strong>Ask</strong> the agent to compare roles or explain gaps. It never submits.</li>{% endif %}
+      <li><strong>Review</strong> the application in your browser and click Submit yourself.</li>
     </ol>
-    <p class="muted">No account, no telemetry, no captcha solving, and no Indeed/LinkedIn automation.</p>
-    <p class="muted">You can rerun this flow any time from the <a href="/setup">Setup</a> link; settings remain editable in <a href="/settings">Settings</a>.</p>
+    <p class="muted">The first scan can take about a minute. Run it from the dashboard after setup.</p>
+    {% if features.agent %}
+    <p class="setup-note">Want the agent? <a href="/providers">Connect a model provider</a> after finishing. The Claude Code CLI bridge is available there too.</p>
+    {% endif %}
   </div>
 </section>
 {% endif %}

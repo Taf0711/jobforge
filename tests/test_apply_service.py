@@ -110,4 +110,82 @@ def test_apply_job_preserves_cover_letter_and_answers(tmp_path: Path, monkeypatc
     assert row["answers_json"] == '{"Email": "t@example.com"}'
     assert calls and calls[0]["cover_letter_path"] == "tailored-cover.txt"
     assert calls[0]["submission_authorized"] is False
+    assert calls[0]["decision_shadow_path"] is None
     conn.close()
+
+
+def test_apply_job_passes_shadow_path_when_enabled(tmp_path: Path, monkeypatch):
+    cfg, conn, job, _resume = _seed(tmp_path)
+    monkeypatch.setenv("JOBFORGE_DECISION_MODEL", "shadow")
+    calls: list[dict] = []
+
+    def fake_run_application(*args, **kwargs):
+        calls.append(kwargs)
+        return FillReport(
+            ats="lever",
+            url="https://jobs.example/apply",
+            resume_uploaded=True,
+            fields=[FieldReport("Email", "t@example.com", "email", "filled")],
+            submitted=False,
+        )
+
+    monkeypatch.setattr("jobforge.automation.base.run_application", fake_run_application)
+    services.apply_job(cfg, conn, job.id)
+    assert calls[0]["decision_shadow_path"] == cfg.data_dir / "decision_shadow.jsonl"
+    assert calls[0]["decision_run_id"] is not None
+    conn.close()
+
+
+def test_apply_job_review_only_ignores_config_submit_and_risk(tmp_path: Path, monkeypatch):
+    from jobforge import risk
+
+    cfg, conn, job, _resume = _seed(tmp_path)
+    cfg.browser.allow_submit = True
+    calls: list[dict] = []
+
+    def fake_run_application(*args, **kwargs):
+        calls.append(kwargs)
+        return FillReport(
+            ats="lever",
+            url="https://jobs.example/apply",
+            resume_uploaded=True,
+            fields=[FieldReport("Email", "t@example.com", "email", "filled")],
+            submitted=False,
+        )
+
+    monkeypatch.setattr("jobforge.automation.base.run_application", fake_run_application)
+    services.apply_job(cfg, conn, job.id, review_only=True)
+
+    assert calls[0]["allow_submit"] is False
+    assert calls[0]["submission_authorized"] is False
+    assert calls[0]["review_only"] is True
+    assert risk.load_usage(cfg).get("count", 0) == 0
+    conn.close()
+
+
+def test_apply_job_rejects_review_only_with_allow_submit(tmp_path: Path):
+    cfg, conn, job, _resume = _seed(tmp_path)
+    with pytest.raises(ValueError, match="review_only"):
+        services.apply_job(cfg, conn, job.id, allow_submit=True, review_only=True)
+    conn.close()
+
+
+def test_launch_apply_subprocess_passes_review_only_flag(tmp_path: Path, monkeypatch):
+    cfg, _conn, _job, _resume = _seed(tmp_path)
+    captured: dict = {}
+
+    class Proc:
+        pid = 123
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return Proc()
+
+    monkeypatch.setattr(services.subprocess, "Popen", fake_popen)
+    pid = services.launch_apply_subprocess(cfg, 42, hold_seconds=30, review_only=True)
+
+    assert pid == 123
+    assert "--review-only" in captured["cmd"]
+    assert "--allow-submit" not in captured["cmd"]
+    assert captured["cmd"][-1] == "--review-only"

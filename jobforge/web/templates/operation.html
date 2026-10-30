@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>Resume request</h1>
+    <span class="pill {{ 'good' if operation.state == 'succeeded' else ('bad' if operation.state in ['failed','denied','expired'] else '') }}">{{ operation.state }}</span>
+  </div>
+  {% if job %}
+  <p><strong>{{ job.company }}</strong> · {{ job.title }}{% if job.location %} · {{ job.location }}{% endif %}</p>
+  {% else %}
+  <p class="muted">Job #{{ operation.payload.job_id }}</p>
+  {% endif %}
+  <table class="compact"><tbody>
+    <tr><td>Operation</td><td><code>{{ operation.id }}</code></td></tr>
+    <tr><td>Created</td><td>{{ operation.created_at }}</td></tr>
+    <tr><td>Approval expires</td><td>{{ operation.expires_at }}</td></tr>
+    {% if operation.approved_at %}<tr><td>Approved</td><td>{{ operation.approved_at }}</td></tr>{% endif %}
+    {% if operation.started_at %}<tr><td>Started</td><td>{{ operation.started_at }}</td></tr>{% endif %}
+    {% if operation.finished_at %}<tr><td>Finished</td><td>{{ operation.finished_at }}</td></tr>{% endif %}
+  </tbody></table>
+
+  {% if operation.state == 'pending_approval' %}
+  <p class="setup-note">This request has no effect until you approve it. The worker will render a tailored PDF and create or update a draft application. It will not open a browser or submit anything.</p>
+  <div class="actions">
+    <form method="post" action="/operations/{{ operation.id }}/approve"><button class="primary">Approve and render</button></form>
+    <form method="post" action="/operations/{{ operation.id }}/deny"><button class="ghost">Deny</button></form>
+  </div>
+  {% elif operation.state == 'approved' %}
+  <p class="muted">Approved. The worker is waiting to claim this operation. Refresh this page for updates.</p>
+  {% elif operation.state == 'running' %}
+  <p class="muted">Rendering in the background. Refresh this page for updates.</p>
+  {% elif operation.state == 'succeeded' %}
+  <p>Resume rendered and attached to the draft application.</p>
+  {% if artifact_url %}<p><a class="button primary" href="{{ artifact_url }}">Open tailored resume PDF</a></p>{% endif %}
+  {% if operation.result.application_id %}<p class="muted">Application ID: {{ operation.result.application_id }}</p>{% endif %}
+  {% if operation.result.warnings %}<p class="muted">Warnings: {{ operation.result.warnings | join('; ') }}</p>{% endif %}
+  {% elif operation.error_message %}
+  <div class="flash bad">{{ operation.error_code }}: {{ operation.error_message }}</div>
+  {% endif %}
+
+  <p><a href="/operations">Back to operations</a> · <a href="/jobs/{{ operation.payload.job_id }}">Open job</a></p>
+</section>
+{% endblock %}
