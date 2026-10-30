@@ -43,6 +43,20 @@ code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); 
 }
 .topbar nav a:hover { background: var(--surface-2); text-decoration: none; color: var(--ink); }
 .topbar nav a.active { background: var(--accent-2); color: var(--accent); }
+.nav-more { position: relative; }
+.nav-more summary {
+  list-style: none; cursor: pointer; color: var(--muted); padding: 6px 10px;
+  border-radius: 999px; font-weight: 500;
+}
+.nav-more summary::-webkit-details-marker { display: none; }
+.nav-more summary:hover, .nav-more summary.active { background: var(--surface-2); color: var(--ink); }
+.nav-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
+  display: grid; gap: 2px; min-width: 180px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(27, 27, 24, 0.12);
+}
+.nav-menu a { display: block; padding: 6px 10px; border-radius: 6px; }
 .who { margin-left: auto; color: var(--muted); font-size: 12px; }
 
 main { max-width: 1180px; margin: 0 auto; padding: 28px 24px 60px; }
@@ -77,6 +91,15 @@ p { margin: 8px 0; }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .grid-2 .panel { margin-bottom: 18px; }
+.console-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 18px; }
+.console-grid .panel { margin-bottom: 18px; }
+.command {
+  margin: 10px 0; padding: 10px 12px; overflow-x: auto;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  font-family: var(--mono); font-size: 12px;
+}
+.quick-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.quick-actions form { margin: 0; }
 
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line); }
@@ -148,7 +171,7 @@ form.inline { display: inline; }
   main { padding: 20px 14px 50px; }
   .hero, .page-head { flex-direction: column; align-items: stretch; }
   .stats { grid-template-columns: 1fr 1fr; }
-  .grid-2 { grid-template-columns: 1fr; }
+  .grid-2, .console-grid { grid-template-columns: 1fr; }
   form.stack .row { grid-template-columns: 1fr; }
   .panel { overflow-x: auto; }
   .meter-row { grid-template-columns: 100px 1fr 44px; }

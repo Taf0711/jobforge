@@ -1,43 +1,83 @@
 {% extends "base.html" %}
-{% block title %}Dashboard · JobForge{% endblock %}
+{% block title %}Console · JobForge{% endblock %}
 {% block content %}
 <section class="hero">
   <div>
-    <p class="eyebrow">Local job search</p>
-    <h1>Discover, score, tailor, apply.</h1>
-    <p class="muted">Fresh roles from public ATS boards. Explainable matches. A tailored resume. A filled form you review before sending.</p>
+    <p class="eyebrow">Local console</p>
+    <h1>Your job search, inside your agent.</h1>
+    <p class="muted">JobForge is the local workbench behind Claude Code, Pi, Hermes, or any MCP host. Review approvals and artifacts here. The agent never submits.</p>
   </div>
   <div class="actions">
-    <form method="post" action="/scan/run"><button class="primary">Run scan</button></form>
-    <form method="post" action="/score/run"><button>Rescore</button></form>
+    <a class="button primary" href="/agents">Add or manage agents</a>
+    {% if pending_operations %}
+    <a class="button" href="/operations">Review {{ pending_operations|length }} approval{{ '' if pending_operations|length == 1 else 's' }}</a>
+    {% endif %}
   </div>
 </section>
 
 <section class="stats">
   <div class="stat"><span>{{ stats.jobs }}</span><small>jobs tracked</small></div>
-  <div class="stat"><span>{{ stats.avg_match }}</span><small>average match</small></div>
   <div class="stat"><span>{{ stats.applications_total }}</span><small>applications</small></div>
-  <div class="stat"><span>{{ stats.applications.get('interview', 0) }}</span><small>interviews</small></div>
+  <div class="stat"><span>{{ pending_operations|length }}</span><small>pending approvals</small></div>
+  <div class="stat"><span>{{ agent_connections|length }}</span><small>connected agents</small></div>
 </section>
 
-{% if features.agent %}
-<section class="panel agent-cta">
-  <div>
-    <p class="eyebrow">Career agent</p>
-    <h2>Ask across your whole search</h2>
-    <p class="muted">Compare matches, explain gaps, find the proof behind a skill, check a warm path, or tailor and review readiness. The agent uses your verified facts and never submits.</p>
-  </div>
-  <div class="actions">
-    {% if agent_ready %}
-    <a class="button primary" href="/agent">Open agent</a>
-    <a class="link" href="/providers">Change model</a>
+<section class="console-grid">
+  <div class="panel">
+    <div class="panel-head"><h2>Connected agents</h2><a class="link" href="/agents">Manage</a></div>
+    {% if agent_connections %}
+    <table>
+      <tbody>
+      {% for connection in agent_connections %}
+        <tr>
+          <td><strong>{{ connection.label or connection.client }}</strong><br><span class="muted">{{ connection.client }}</span></td>
+          <td><span class="pill {{ '' if connection.enabled else 'bad' }}">{{ 'enabled' if connection.enabled else 'disabled' }}</span></td>
+          <td class="muted">{{ connection.last_used_at[:16] if connection.last_used_at else 'never used' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
     {% else %}
-    <a class="button primary" href="/providers">Connect a model</a>
-    <a class="link" href="/agent">Preview agent</a>
+    <p class="empty">No agent connected yet.</p>
+    <pre class="command">npx jobforge</pre>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Pending approvals</h2><a class="link" href="/operations">All approvals</a></div>
+    {% if pending_operations %}
+    <table>
+      <tbody>
+      {% for operation in pending_operations[:4] %}
+        <tr>
+          <td>
+            <a href="/operations/{{ operation.id }}">{{ operation.job_company or operation.action }}</a><br>
+            <span class="muted">{{ operation.job_title or operation.action }}</span>
+          </td>
+          <td class="muted">{{ operation.created_at[:16] }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if pending_operations|length > 4 %}<p class="muted">{{ pending_operations|length - 4 }} more waiting.</p>{% endif %}
+    {% else %}
+    <p class="empty">Nothing waiting for approval.</p>
+    <p class="muted">When an agent requests a resume, it appears here.</p>
     {% endif %}
   </div>
 </section>
-{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>Quick actions</h2></div>
+  <div class="quick-actions">
+    <a class="button primary" href="/agents">Install / repair agent</a>
+    <a class="button" href="/operations">Review approvals</a>
+    <a class="button" href="/jobs">Browse jobs</a>
+    <a class="button" href="/applications">Tracker</a>
+    <form method="post" action="/scan/run"><button>Run scan</button></form>
+    <form method="post" action="/score/run"><button>Rescore</button></form>
+  </div>
+</section>
 
 <section class="panel">
   <div class="panel-head">

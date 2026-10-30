@@ -42,7 +42,7 @@ def test_pages_render(tmp_path: Path):
     conn.close()
 
     client = TestClient(app)
-    for path in ["/", "/jobs", "/queue", "/applications", "/profiles", "/settings", "/inbox", "/runs", "/healthz"]:
+    for path in ["/", "/jobs", "/agents", "/queue", "/applications", "/profiles", "/settings", "/inbox", "/runs", "/healthz"]:
         response = client.get(path)
         assert response.status_code == 200, path
         assert "JobForge" in response.text or path == "/healthz"

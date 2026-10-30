@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Agents · JobForge{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">Agent connections</p>
+    <h1>Use JobForge inside your agent.</h1>
+    <p class="muted">Each connection is bound to one profile and grants only the scopes you approved. The host agent supplies the model; JobForge supplies local state, validation, rendering, and approvals.</p>
+  </div>
+  <div class="actions">
+    <a class="button primary" href="/operations">Review approvals</a>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Install or repair an agent</h2></div>
+  <p class="muted">Run this in a terminal. The wizard detects your agents, shows the exact config and skill paths, backs up host configs, and registers the MCP server. No model provider is required.</p>
+  <pre class="command">npx jobforge</pre>
+  <p class="muted">Supported: Claude Code, Codex, Pi, Hermes, OMP, and generic MCP. Optional Chromium and Typst installs are separate consent prompts.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Connections</h2><span class="muted">{{ connections|length }} for this profile</span></div>
+  {% if connections %}
+  <table>
+    <thead><tr><th>Agent</th><th>Status</th><th>Scopes</th><th>Last used</th></tr></thead>
+    <tbody>
+    {% for connection in connections %}
+      <tr>
+        <td><strong>{{ connection.label or connection.client }}</strong><br><span class="muted">{{ connection.client }}</span></td>
+        <td><span class="pill {{ '' if connection.enabled else 'bad' }}">{{ 'enabled' if connection.enabled else 'disabled' }}</span></td>
+        <td class="muted">{{ connection.scopes|join(', ') }}</td>
+        <td class="muted">{{ connection.last_used_at[:16] if connection.last_used_at else 'never' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No agent connection for this profile yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Detected hosts</h2><span class="muted">read-only</span></div>
+  {% if hosts %}
+  <table>
+    <thead><tr><th>Host</th><th>Detected</th><th>MCP entry</th><th>Skill</th><th>Config</th></tr></thead>
+    <tbody>
+    {% for host in hosts %}
+      <tr>
+        <td>{{ host.label }}</td>
+        <td><span class="pill {{ '' if host.detected else 'bad' }}">{{ 'yes' if host.detected else 'no' }}</span></td>
+        <td><span class="pill {{ '' if host.config_entry_present else 'bad' }}">{{ 'installed' if host.config_entry_present else 'missing' }}</span></td>
+        <td><span class="pill {{ '' if host.skill_installed else 'bad' }}">{{ 'installed' if host.skill_installed else 'missing' }}</span></td>
+        <td class="muted"><code>{{ host.config_path }}</code></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">Host detection is unavailable.</p>
+  {% endif %}
+</section>
+{% endblock %}

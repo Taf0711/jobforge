@@ -422,6 +422,21 @@ def create_app(config: Config | None = None) -> FastAPI:
                 job["warm_score"] = warm["score"]
         apps = db.list_applications(conn, profile.id, limit=8)
         runs = db.list_runs(conn, 6)
+        agent_connections = [
+            item
+            for item in db.list_agent_connections(conn)
+            if int(item.get("profile_id") or 0) == int(profile.id or 0)
+        ]
+        pending_operations = [
+            item
+            for item in db.list_agent_operations(conn, profile_id=profile.id, limit=20)
+            if item.get("state") == "pending_approval"
+        ]
+        for operation in pending_operations:
+            job_id = int((operation.get("payload") or {}).get("job_id") or 0)
+            job = db.get_job(conn, job_id) if job_id else None
+            operation["job_company"] = job.company if job else ""
+            operation["job_title"] = job.title if job else ""
         github_lead_jobs = db.list_jobs(
             conn, profile.id, source="github_jobs", min_score=0, limit=5
         )
@@ -437,9 +452,32 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "jobs": jobs,
                 "apps": apps,
                 "runs": runs,
+                "agent_connections": agent_connections,
+                "pending_operations": pending_operations,
                 "github_lead_jobs": github_lead_jobs,
                 "github_lead_count": github_lead_count,
             },
+        )
+
+    @app.get("/agents", response_class=HTMLResponse)
+    def agents_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+        from ..installer import detect_hosts
+
+        ctx = context(request, conn)
+        profile = ctx["profile"]
+        connections = [
+            item
+            for item in db.list_agent_connections(conn)
+            if int(item.get("profile_id") or 0) == int(profile.id or 0)
+        ]
+        try:
+            hosts = detect_hosts()
+        except Exception:  # noqa: BLE001 - display-only detection
+            hosts = []
+        return templates.TemplateResponse(
+            request=request,
+            name="agents.html",
+            context={**ctx, "connections": connections, "hosts": hosts},
         )
 
     @app.get("/jobs", response_class=HTMLResponse)

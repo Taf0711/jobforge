@@ -8,24 +8,36 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  {% set nav = namespace(more_active=false) %}
+  {% if request.url.path.startswith('/autopilot') or request.url.path.startswith('/answers') or request.url.path.startswith('/inbox') or request.url.path.startswith('/runs') or request.url.path.startswith('/connections') or request.url.path == '/agent' or request.url.path.startswith('/providers') or request.url.path.startswith('/setup') %}
+  {% set nav.more_active = true %}
+  {% endif %}
   <header class="topbar">
     <a class="brand" href="/">Job<span>Forge</span></a>
     <nav>
-      <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">Dashboard</a>
+      <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">Console</a>
       <a href="/jobs" class="{{ 'active' if request.url.path.startswith('/jobs') else '' }}">Jobs</a>
       <a href="/applications" class="{{ 'active' if request.url.path.startswith('/applications') else '' }}">Applications</a>
-      {% if features.agent_integrations %}<a href="/operations" class="{{ 'active' if request.url.path.startswith('/operations') else '' }}">Operations</a>{% endif %}
+      {% if features.agent_integrations %}
+      <a href="/operations" class="{{ 'active' if request.url.path.startswith('/operations') else '' }}">Approvals</a>
+      <a href="/agents" class="{{ 'active' if request.url.path.startswith('/agents') else '' }}">Agents</a>
+      {% endif %}
       <a href="/queue" class="{{ 'active' if request.url.path.startswith('/queue') else '' }}">Queue</a>
-      <a href="/autopilot" class="{{ 'active' if request.url.path.startswith('/autopilot') else '' }}">Autopilot</a>
-      {% if features.agent %}<a href="/agent" class="{{ 'active' if request.url.path.startswith('/agent') else '' }}">Agent</a>{% endif %}
-      <a href="/answers" class="{{ 'active' if request.url.path.startswith('/answers') else '' }}">Answers</a>
-      <a href="/inbox" class="{{ 'active' if request.url.path.startswith('/inbox') else '' }}">Inbox</a>
       <a href="/profiles" class="{{ 'active' if request.url.path.startswith('/profiles') else '' }}">Profiles</a>
-      {% if features.github_connections %}<a href="/connections" class="{{ 'active' if request.url.path.startswith('/connections') else '' }}">Connections</a>{% endif %}
-      {% if features.agent %}<a href="/providers" class="{{ 'active' if request.url.path.startswith('/providers') else '' }}">Models</a>{% endif %}
-      {% if features.setup_wizard %}<a href="/setup" class="{{ 'active' if request.url.path.startswith('/setup') else '' }}">Setup</a>{% endif %}
       <a href="/settings" class="{{ 'active' if request.url.path.startswith('/settings') else '' }}">Settings</a>
-      <a href="/runs" class="{{ 'active' if request.url.path.startswith('/runs') else '' }}">Runs</a>
+      <details class="nav-more" {% if nav.more_active %}open{% endif %}>
+        <summary class="{{ 'active' if nav.more_active else '' }}">More</summary>
+        <div class="nav-menu">
+          <a href="/autopilot">Autopilot</a>
+          <a href="/answers">Answers</a>
+          <a href="/inbox">Inbox</a>
+          <a href="/runs">Runs</a>
+          {% if features.github_connections %}<a href="/connections">GitHub</a>{% endif %}
+          {% if features.agent %}<a href="/agent">Built-in agent</a>{% endif %}
+          {% if features.agent %}<a href="/providers">Models</a>{% endif %}
+          {% if features.setup_wizard %}<a href="/setup">Setup</a>{% endif %}
+        </div>
+      </details>
     </nav>
     <span class="who">{{ profile.full_name or profile.name }}</span>
   </header>
@@ -40,7 +52,7 @@
   </main>
 
   <footer>
-    Local-first. No account, no telemetry. The agent can prepare and fill, but you click Submit.
+    Local-first. No account, no telemetry. The agent prepares; you review and submit.
   </footer>
   <script src="/static/app.js"></script>
   <script src="/static/selection-ask.js" defer></script>

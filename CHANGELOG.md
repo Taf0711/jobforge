@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1 — console redesign (2026-10-30)
+
+- Replaced the standalone dashboard hero and built-in-agent CTA with a
+  skill/MCP-first console: connected agents, pending approvals, quick actions,
+  then best matches.
+- Added `/agents` with profile-bound connections, detected hosts, MCP/skill
+  status, and the `npx jobforge` install/repair command.
+- Reduced the primary nav to Console, Jobs, Applications, Approvals, Agents,
+  Queue, Profiles, and Settings; utility pages are under **More**.
+- No behavior change to the agent, queue, quality, or submit gates.
+
 ## 0.5.0 — skill/MCP installer (2026-10-30)
 
 - Added `jobforge install hosts|plan|apply|doctor` with JSON output for the

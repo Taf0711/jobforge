@@ -1,6 +1,6 @@
 {
   "name": "jobforge",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Install the JobForge local MCP server and Agent Skill into your coding agent.",
   "type": "module",
   "bin": {
