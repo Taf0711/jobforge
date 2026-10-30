@@ -23,14 +23,14 @@
   <div class="panel-head"><h2>Connections</h2><span class="muted">{{ connections|length }} for this profile</span></div>
   {% if connections %}
   <table>
-    <thead><tr><th>Agent</th><th>Status</th><th>Scopes</th><th>Last used</th></tr></thead>
+    <thead><tr><th>Agent</th><th>Status</th><th class="col-scopes">Scopes</th><th class="col-last-used">Last used</th></tr></thead>
     <tbody>
     {% for connection in connections %}
       <tr>
         <td><strong>{{ connection.label or connection.client }}</strong><br><span class="muted">{{ connection.client }}</span></td>
         <td><span class="pill {{ '' if connection.enabled else 'bad' }}">{{ 'enabled' if connection.enabled else 'disabled' }}</span></td>
-        <td class="muted">{{ connection.scopes|join(', ') }}</td>
-        <td class="muted">{{ connection.last_used_at[:16] if connection.last_used_at else 'never' }}</td>
+        <td class="muted col-scopes">{{ connection.scopes|join(', ') }}</td>
+        <td class="muted col-last-used">{{ connection.last_used_at[:16] if connection.last_used_at else 'never' }}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -44,7 +44,7 @@
   <div class="panel-head"><h2>Detected hosts</h2><span class="muted">read-only</span></div>
   {% if hosts %}
   <table>
-    <thead><tr><th>Host</th><th>Detected</th><th>MCP entry</th><th>Skill</th><th>Config</th></tr></thead>
+    <thead><tr><th>Host</th><th>Detected</th><th>MCP entry</th><th>Skill</th><th class="col-config">Config</th></tr></thead>
     <tbody>
     {% for host in hosts %}
       <tr>
@@ -52,11 +52,12 @@
         <td><span class="pill {{ '' if host.detected else 'bad' }}">{{ 'yes' if host.detected else 'no' }}</span></td>
         <td><span class="pill {{ '' if host.config_entry_present else 'bad' }}">{{ 'installed' if host.config_entry_present else 'missing' }}</span></td>
         <td><span class="pill {{ '' if host.skill_installed else 'bad' }}">{{ 'installed' if host.skill_installed else 'missing' }}</span></td>
-        <td class="muted"><code>{{ host.config_path }}</code></td>
+        <td class="muted col-config"><code>{{ host.config_path }}</code></td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
+  <p class="muted">A missing MCP entry means the host is detected but JobForge is not registered there yet. Run <code>npx jobforge</code> and select that host.</p>
   {% else %}
   <p class="empty">Host detection is unavailable.</p>
   {% endif %}

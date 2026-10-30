@@ -55,7 +55,7 @@
     {% if events %}
       <h3>History</h3>
       <table class="compact"><tbody>
-      {% for e in events %}<tr><td class="muted">{{ e.at[:16] }}</td><td>{{ e.kind }}</td><td>{{ e.detail }}</td></tr>{% endfor %}
+      {% for e in events %}<tr><td class="muted">{{ e.at[:16] }}</td><td>{{ e.kind }}</td><td>{% if e.kind == 'tailored' and application %}<a href="/artifacts/{{ application.id }}/resume">Resume PDF</a>{% else %}{{ e.detail }}{% endif %}</td></tr>{% endfor %}
       </tbody></table>
     {% endif %}
   </div>
@@ -143,7 +143,9 @@
 {% endif %}
 
 <section class="panel">
-  <div class="panel-head"><h2>Job description</h2></div>
-  <pre class="jd" data-ask-surface data-ask-context="Job description · {{ job.company }} — {{ job.title }}">{{ job.description }}</pre>
+  <details class="jd-wrap">
+    <summary><h2>Job description</h2></summary>
+    <pre class="jd" data-ask-surface data-ask-context="Job description · {{ job.company }} — {{ job.title }}">{{ job.description }}</pre>
+  </details>
 </section>
 {% endblock %}

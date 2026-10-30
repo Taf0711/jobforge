@@ -32,7 +32,7 @@
         <tr>
           <td><strong>{{ connection.label or connection.client }}</strong><br><span class="muted">{{ connection.client }}</span></td>
           <td><span class="pill {{ '' if connection.enabled else 'bad' }}">{{ 'enabled' if connection.enabled else 'disabled' }}</span></td>
-          <td class="muted">{{ connection.last_used_at[:16] if connection.last_used_at else 'never used' }}</td>
+          <td class="muted col-last-used">{{ connection.last_used_at[:16] if connection.last_used_at else 'never used' }}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -86,16 +86,16 @@
   </div>
   {% if jobs %}
   <table>
-    <thead><tr><th>Score</th><th>Company</th><th>Role</th><th>Location</th><th>Salary</th><th>Warm</th><th></th></tr></thead>
+    <thead><tr><th>Score</th><th>Company</th><th>Role</th><th class="col-location">Location</th><th class="col-salary">Salary</th><th class="col-warm">Warm</th><th></th></tr></thead>
     <tbody>
     {% for job in jobs %}
       <tr>
         <td><span class="score {{ 'strong' if (job.score or 0) >= 75 else ('ok' if (job.score or 0) >= 55 else 'weak') }}">{{ '%.0f'|format(job.score or 0) }}</span></td>
         <td>{{ job.company }}</td>
         <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
-        <td>{{ job.location or ('Remote' if job.remote else '') }}</td>
-        <td>{% if job.salary_min %}{{ job.salary_min|money }}{% if job.salary_max %} – {{ job.salary_max|money }}{% endif %}{% endif %}</td>
-        <td>{% if job.warm_channel and job.warm_channel != 'cold_only' %}<span class="pill">{{ job.warm_channel.replace('_', ' ') }}</span>{% endif %}</td>
+        <td class="col-location">{{ job.location or ('Remote' if job.remote else '') }}</td>
+        <td class="col-salary">{% if job.salary_min %}{{ job.salary_min|money }}{% if job.salary_max %} – {{ job.salary_max|money }}{% endif %}{% endif %}</td>
+        <td class="col-warm">{% if job.warm_channel and job.warm_channel != 'cold_only' %}<span class="pill">{{ job.warm_channel.replace('_', ' ') }}</span>{% endif %}</td>
         <td>{% if job.application_status %}<span class="pill">{{ job.application_status }}</span>{% endif %}</td>
       </tr>
     {% endfor %}
@@ -120,8 +120,8 @@
         <td><span class="score weak">{{ '%.0f'|format(job.score or 0) }}</span></td>
         <td>{{ job.company }}</td>
         <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
-        <td class="muted">{{ job.location or ('Remote' if job.remote else '') }}</td>
-        <td class="muted">{{ job.posted_at[:10] if job.posted_at else '' }}</td>
+        <td class="muted col-location">{{ job.location or ('Remote' if job.remote else '') }}</td>
+        <td class="muted col-date">{{ job.posted_at[:10] if job.posted_at else '' }}</td>
       </tr>
     {% endfor %}
     </tbody>

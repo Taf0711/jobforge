@@ -188,7 +188,7 @@ def _check_resume(application: Application | None) -> QualityCheck:
         name="resume",
         passed=True,
         severity=BLOCKER,
-        detail=path,
+        detail="resume present",
     )
 
 
@@ -279,7 +279,7 @@ def _check_cover_letter(application: Application | None) -> QualityCheck:
         name="cover_letter",
         passed=True,
         severity=WARNING,
-        detail=path,
+        detail="cover letter present",
     )
 
 

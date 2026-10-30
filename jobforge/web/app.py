@@ -410,7 +410,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             profile.id,
             min_score=ctx["prefs"].min_match,
             one_per_company=ctx["prefs"].one_application_per_company,
-            limit=10,
+            limit=6,
         )
         graph = services.load_network(cfg)
         if graph:
@@ -420,8 +420,8 @@ def create_app(config: Config | None = None) -> FastAPI:
                 )
                 job["warm_channel"] = warm["channel"]
                 job["warm_score"] = warm["score"]
-        apps = db.list_applications(conn, profile.id, limit=8)
-        runs = db.list_runs(conn, 6)
+        apps = db.list_applications(conn, profile.id, limit=6)
+        runs = db.list_runs(conn, 5)
         agent_connections = [
             item
             for item in db.list_agent_connections(conn)
@@ -438,7 +438,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             operation["job_company"] = job.company if job else ""
             operation["job_title"] = job.title if job else ""
         github_lead_jobs = db.list_jobs(
-            conn, profile.id, source="github_jobs", min_score=0, limit=5
+            conn, profile.id, source="github_jobs", min_score=0, limit=3
         )
         github_lead_count = conn.execute(
             "SELECT COUNT(*) AS n FROM jobs WHERE source='github_jobs'"

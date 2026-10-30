@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2 — UI refinement (2026-10-30)
+
+- Refined the console typography, spacing, surface depth, table scanability, and
+  status badges.
+- Added consistent hover, focus-visible, active, disabled, and reduced-motion
+  states.
+- Switched the palette to OKLCH tokens and added semantic surface/state colors.
+- Added a skip link, `aria-current` navigation, tabular numbers, and mobile
+  column hiding for data tables.
+- Collapsed the job description and replaced raw artifact paths in quality and
+  history rows with readable states and PDF links.
+
 ## 0.5.1 — console redesign (2026-10-30)
 
 - Replaced the standalone dashboard hero and built-in-agent CTA with a

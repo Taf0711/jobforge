@@ -27,7 +27,7 @@ def _server_version() -> str:
     try:
         return version("jobforge")
     except PackageNotFoundError:
-        return "0.5.1"
+        return "0.5.2"
 
 
 SERVER_VERSION = _server_version()
