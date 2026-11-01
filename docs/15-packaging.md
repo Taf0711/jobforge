@@ -148,7 +148,7 @@ OIDC. It uses `id-token: write`, requires npm 11.15+, and needs **no
 within two days or it expires.
 
 `installer/package.json` version must equal the tag without the leading `v`, and
-its `repository.url` must remain `https://github.com/Taf0711/jobforge`.
+its `repository.url` must remain `git+https://github.com/Taf0711/jobforge.git`.
 
 Manual local publish after bootstrap:
 

@@ -19,7 +19,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Taf0711/jobforge"
+    "url": "git+https://github.com/Taf0711/jobforge.git"
   },
   "homepage": "https://github.com/Taf0711/jobforge#readme",
   "bugs": {
