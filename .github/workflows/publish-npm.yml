@@ -51,6 +51,9 @@ jobs:
         working-directory: installer
         run: npm pack --dry-run
 
+      # NPM_TOKEN is a granular access token with Read and write package
+      # permission and Bypass 2FA enabled. After the first publish, prefer
+      # npm trusted publishing and remove the token.
       - name: Publish
         working-directory: installer
         run: npm publish --access public

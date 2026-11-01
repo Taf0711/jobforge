@@ -23,4 +23,13 @@ fi
 echo "Publishing jobforge@$VERSION from $TAG"
 npm ci
 npm pack --dry-run
-npm publish --access public "$@"
+
+args=(--access public --registry https://registry.npmjs.org/)
+if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+  npmrc="$(mktemp)"
+  chmod 600 "$npmrc"
+  trap 'rm -f "$npmrc"' EXIT
+  printf '//registry.npmjs.org/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$npmrc"
+  args+=(--userconfig "$npmrc")
+fi
+npm publish "${args[@]}" "$@"

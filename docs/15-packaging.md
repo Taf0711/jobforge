@@ -125,8 +125,12 @@ The `npx jobforge` wizard is the separate npm package in `installer/`. It is
 published independently from the Python wheel.
 
 - CI: `.github/workflows/publish-npm.yml` runs on `v*` tags and manual dispatch.
-  Add an npm **automation** token as the `NPM_TOKEN` repository secret.
+  Add an npm **granular access token** as the `NPM_TOKEN` repository secret.
+- Granular token settings: **Read and write** package permission, **All
+  packages** for the first publish, and **Bypass two-factor authentication**
+  enabled. After `jobforge` exists, restrict the token to that package.
 - `installer/package.json` version must equal the tag without the leading `v`.
 - Manual local publish: `scripts/publish_npm.sh` (pass `--otp CODE` when npm asks
-  for a one-time password).
-- `npm publish` uses 2FA unless the token is an automation token.
+  for a one-time password, or set `NODE_AUTH_TOKEN` to a granular token).
+- After the first publish, prefer npm trusted publishing for CI and remove the
+  long-lived token.
