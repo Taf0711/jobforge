@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — scan-first ranking
+## 0.6.0 — scan-first ranking (2026-11-01)
 
 - Added a two-stage discovery pipeline: fast scan ranking in `scan_matches`,
   then deep fit in `matches`.
