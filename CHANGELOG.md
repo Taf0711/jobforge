@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — scan-first ranking
+
+- Added a two-stage discovery pipeline: fast scan ranking in `scan_matches`,
+  then deep fit in `matches`.
+- Added first-pass filters for stale, non-US, internship, senior, non-SWE,
+  already-applied, recent-rejection, excluded-company, and duplicate rows.
+- Added the resume-forge quick-scan rubric: level, archetype relevance,
+  location/relocation, freshness/competition, domain adjacency, and stack.
+- Added flat `scan_sources.yml` registry support with per-source
+  `competition_profile` values.
+- Added HN and GitHub-pipe source adapters.
+- Stopped multiplying location into deep fit; location is now a risk/gap and a
+  cost-of-living pursuit modifier.
+- Lead-only descriptions are marked provisional instead of being presented as
+  precise fits.
+- MCP, CLI, and web jobs lists now expose scan score, confidence, competition
+  profile, age, and scan reasons.
+
 ## 0.5.3 — Installer runtime updates (2026-11-01)
 
 - Fixed the Hermes installer path: `hermes mcp add` now receives a non-interactive

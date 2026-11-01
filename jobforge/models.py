@@ -62,10 +62,13 @@ class Job:
     posted_at: str | None = None
     discovered_at: str = field(default_factory=utcnow)
     raw: dict[str, Any] = field(default_factory=dict)
+    competition_profile: str = ""
     id: int | None = None
     fingerprint: str = ""
 
     def __post_init__(self) -> None:
+        if self.competition_profile:
+            self.raw.setdefault("competition_profile", self.competition_profile)
         if not self.fingerprint:
             basis = "|".join(
                 [
@@ -172,6 +175,23 @@ class MatchResult:
         if self.score >= 50:
             return "stretch"
         return "weak"
+
+
+@dataclass
+class ScanResult:
+    """Fast discovery score. Distinct from the deep MatchResult."""
+
+    job_id: int | None
+    profile_id: int
+    scan_score: float
+    confidence: float
+    band: str
+    competition_profile: str = ""
+    age_days: int | None = None
+    reasons: list[str] = field(default_factory=list)
+    gaps: list[str] = field(default_factory=list)
+    meta: dict[str, Any] = field(default_factory=dict)
+    model_version: str = "jobforge-scan-v1"
 
 
 @dataclass

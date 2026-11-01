@@ -18,6 +18,17 @@
 
 <section class="grid-2">
   <div class="panel">
+    <div class="panel-head"><h2>Scan</h2><span class="score big {{ 'strong' if scan and scan.scan_score >= 75 else ('ok' if scan and scan.scan_score >= 55 else 'weak') }}">{{ '%.0f'|format(scan.scan_score) if scan else '—' }}</span></div>
+    {% if scan %}
+      <p class="muted">{{ scan.competition_profile or 'unknown source class' }} · {{ '%.0f'|format(scan.confidence) }}% confidence · {{ scan.age_days if scan.age_days is not none else '?' }}d old</p>
+      <ul class="reasons">{% for r in scan.reasons[:6] %}<li>{{ r }}</li>{% endfor %}</ul>
+      {% if scan.gaps %}<ul class="gaps">{% for g in scan.gaps[:4] %}<li>{{ g }}</li>{% endfor %}</ul>{% endif %}
+    {% else %}
+      <p class="empty">Not quick-scored yet. Run a scan.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
     <div class="panel-head"><h2>Fit</h2><span class="score big {{ 'strong' if match and match.score >= 75 else ('ok' if match and match.score >= 55 else 'weak') }}">{{ '%.0f'|format(match.score) if match else '—' }}</span></div>
     {% if match %}
       <div class="meter-row"><span>Skill coverage</span><div class="meter"><i style="width: {{ (match.coverage * 100)|round(0) }}%"></i></div><b>{{ match.coverage|pct }}</b></div>

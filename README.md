@@ -62,8 +62,9 @@ Open <http://127.0.0.1:8765>. Windows installs are supported, but native Windows
 ```bash
 npx jobforge                          # install into local agents
 jobforge app                          # open the console
-jobforge scan                         # discover jobs
-jobforge score                        # score unscored jobs
+jobforge scan                         # discover, filter, and quick-score jobs
+jobforge jobs --sort scan             # scan-ranked list
+jobforge score --top 20               # deep-score the top scan rows
 jobforge tailor --job 42              # build a resume
 jobforge apply --job 42               # fill + review; never submit
 jobforge autopilot run --limit 5      # sequential, risk-gated pass
@@ -80,7 +81,7 @@ After installing the skill, restart your agent and ask:
 
 ```text
 public ATS APIs / job pages
-  → jobs + matches (SQLite)
+  → jobs + scan_matches (fast ranking) + matches (deep fit)
   → verified profile facts
   → one-page Typst resume + ATS check
   → browser fill + screenshot
@@ -99,7 +100,9 @@ The quality gate blocks below-threshold, duplicate-company, already-submitted, m
 | `jobforge install plan --hosts claude_code,pi` | Show the install plan without writing |
 | `jobforge install doctor --hosts ...` | Verify connections, skills, and config entries |
 | `jobforge app` | Start the local console |
-| `jobforge scan` / `score` | Discover and score jobs |
+| `jobforge scan` | Discover, filter, and quick-score jobs |
+| `jobforge jobs --sort scan` | Show the scan-ranked list |
+| `jobforge score --top 20` | Deep-score selected jobs |
 | `jobforge tailor --job 42` | Generate a tailored resume |
 | `jobforge apply --job 42` | Fill an application in review mode |
 | `jobforge queue ...` | Build, prepare, and review the supervised queue |
@@ -111,11 +114,14 @@ The quality gate blocks below-threshold, duplicate-company, already-submitted, m
 
 `config.yml` controls sources, paths, preferences, browser behavior, and the active optional provider. Provider keys never go in `config.yml`; they use the OS keychain, a `0600` fallback, or environment variables.
 
+Scan uses the grouped `sources:` boards by default. Set `scan.sources_path` to a flat registry (the resume-forge `scan_sources.yml` format) to use per-source competition profiles and first-pass filters. See `docs/39-scan.md`.
+
 Feature flags: `setup_wizard`, `github_connections`, `scoring_v2`, `agent`, `agent_integrations`. See `docs/21-feature-flags.md`.
 
 ## Docs
 
 - `docs/03-architecture.md` — modules, data flow, trust boundaries
+- `docs/39-scan.md` — quick scan, filters, and deep fit
 - `docs/11-queue.md` — supervised queue
 - `docs/12-quality.md` — pre-submit gate
 - `docs/13-risk-consent.md` — unattended submit policy

@@ -107,8 +107,9 @@ def test_remote_scope_is_not_treated_as_global_remote():
     india = score_job(_job("Requirements:\n- Python", location="Remote - India"), profile, prefs)
     usa = score_job(_job("Requirements:\n- Python", location="Remote - USA"), profile, prefs)
 
-    assert india.gate_survival == 0.25
-    assert any("Remote scope" in reason for reason in india.reasons)
+    assert india.gate_survival == 1.0
+    assert india.meta["location"]["relocation_fit"] == 0.25
+    assert any("Remote scope" in gap for gap in india.gaps)
     assert usa.gate_survival == 1.0
 
 

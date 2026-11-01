@@ -266,3 +266,25 @@ class GitHubJobsSource(JobSource):
             seen.add(key)
             unique.append(job)
         return unique[:MAX_ROWS]
+
+
+class GitHubPipeSource(JobSource):
+    """A GitHub-hosted markdown pipe table, addressed by raw URL.
+
+    Jobright and similar feeds publish a pipe table on a branch. This adapter
+    fetches the exact URL instead of guessing an owner/repo/HEAD combination.
+    """
+
+    name = "github_pipe"
+
+    def fetch(self, board: str, **kwargs: Any) -> list[Job]:
+        url = str(kwargs.get("url") or board or "").strip()
+        if not url:
+            raise ValueError("github_pipe source needs a URL")
+        label = str(kwargs.get("name") or "github_pipe")
+        response = http_get(url, max_bytes=8 * 1024 * 1024)
+        text = response.content.decode("utf-8", errors="replace")
+        jobs = _markdown_rows(text, label, url)
+        if not jobs:
+            jobs = _html_rows(text, label, url)
+        return jobs

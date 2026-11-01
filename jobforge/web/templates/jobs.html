@@ -8,7 +8,13 @@
 
 <form class="filters" method="get" action="/jobs">
   <input type="search" name="q" value="{{ q }}" placeholder="Search title, company, description">
-  <input type="number" name="min_score" value="{{ min_score if min_score is not none else '' }}" min="0" max="100" placeholder="Min score">
+  <input type="number" name="min_scan" value="{{ min_scan if min_scan is not none else '' }}" min="0" max="100" placeholder="Min scan">
+  <input type="number" name="min_score" value="{{ min_score if min_score is not none else '' }}" min="0" max="100" placeholder="Min fit">
+  <select name="sort">
+    {% for option in ['scan', 'fit', 'recent'] %}
+      <option value="{{ option }}" {{ 'selected' if sort == option else '' }}>Sort: {{ option }}</option>
+    {% endfor %}
+  </select>
   <select name="source">
     <option value="">All sources</option>
     {% for s in ['greenhouse','lever','ashby','workable','smartrecruiters','github_jobs','direct','workday'] %}
@@ -20,15 +26,16 @@
 </form>
 
 <section class="panel">
-  <div class="panel-head"><h2>{{ jobs|length }} roles</h2><span class="muted">Sorted by match</span></div>
+  <div class="panel-head"><h2>{{ jobs|length }} roles</h2><span class="muted">Sorted by {{ sort }}</span></div>
   {% if jobs %}
   <table>
-    <thead><tr><th>Fit</th><th>Pursuit</th><th>Company</th><th>Role</th><th>Location</th><th>Salary</th><th>Source</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Scan</th><th>Fit</th><th>Competition</th><th>Company</th><th>Role</th><th>Location</th><th>Salary</th><th>Source</th><th>Status</th><th></th></tr></thead>
     <tbody>
     {% for job in jobs %}
       <tr>
-        <td><span class="score {{ 'strong' if (job.score or 0) >= 75 else ('ok' if (job.score or 0) >= 55 else 'weak') }}">{{ '%.0f'|format(job.score or 0) }}</span></td>
-        <td>{% set pursuit = (job.meta or {}).get('pursuit') %}{{ '%.0f'|format(pursuit) if pursuit is not none else '—' }}</td>
+        <td>{% if job.scan %}<span class="score {{ 'strong' if job.scan.score >= 75 else ('ok' if job.scan.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.scan.score) }}</span> <span class="muted">{{ '%.0f'|format(job.scan.confidence) }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if job.score is not none %}<span class="score {{ 'strong' if job.score >= 75 else ('ok' if job.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.score) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="muted">{{ job.scan.competition_profile if job.scan else '—' }}</td>
         <td>{{ job.company }}</td>
         <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
         <td>{{ job.location or ('Remote' if job.remote else '') }}</td>

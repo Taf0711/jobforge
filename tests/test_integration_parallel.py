@@ -206,6 +206,7 @@ def test_scan_filters_titles_and_caps_new_jobs(tmp_path: Path, monkeypatch):
         "keywords": ["software engineer"],
         "exclude_keywords": ["senior"],
         "max_new": 1,
+        "max_age_days": 0,
     }
     _seed(cfg)
     report = FetchReport(
@@ -250,7 +251,10 @@ def test_scan_filters_titles_and_caps_new_jobs(tmp_path: Path, monkeypatch):
         ],
         per_source={"lever": 5},
     )
-    monkeypatch.setattr(services, "fetch_configured", lambda config, only=None: report)
+    from jobforge.scan import service as scan_service
+
+    monkeypatch.setattr(scan_service, "fetch_configured", lambda config, only=None: report)
+    monkeypatch.setattr(scan_service, "registry_path", lambda config: None)
     conn = db.connect(cfg.db_path)
 
     stats = services.scan(cfg, conn)
@@ -265,7 +269,7 @@ def test_scan_filters_titles_and_caps_new_jobs(tmp_path: Path, monkeypatch):
     conn.close()
 
 
-def test_scan_route_scores_only_unscored_jobs(tmp_path: Path, monkeypatch):
+def test_scan_route_quick_scores_without_deep_rescoring(tmp_path: Path, monkeypatch):
     cfg = _config(tmp_path)
     _seed(cfg)
     calls: list[bool] = []
@@ -276,6 +280,7 @@ def test_scan_route_scores_only_unscored_jobs(tmp_path: Path, monkeypatch):
         lambda config, conn: {
             "new": 1,
             "seen": 0,
+            "scanned": 1,
             "errors": [],
             "per_source": {"lever": 1},
         },
@@ -294,10 +299,10 @@ def test_scan_route_scores_only_unscored_jobs(tmp_path: Path, monkeypatch):
     )
 
     assert response.status_code == 303
-    assert calls == [True]
+    assert calls == []
     from urllib.parse import unquote
 
-    assert "scored 1" in unquote(response.headers["location"])
+    assert "quick-scored" in unquote(response.headers["location"])
 
 
 def test_score_all_can_score_only_unscored_jobs(tmp_path: Path):

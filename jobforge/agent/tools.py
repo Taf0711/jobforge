@@ -163,27 +163,43 @@ def _tool_search_jobs(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         min_score = None
     if min_score is not None:
         min_score = max(0.0, min(100.0, min_score))
+    minimum_scan = args.get("min_scan")
+    try:
+        min_scan = float(minimum_scan) if minimum_scan is not None else None
+    except (TypeError, ValueError):
+        min_scan = None
+    if min_scan is not None:
+        min_scan = max(0.0, min(100.0, min_scan))
     source = str(args.get("source") or "").strip()[:60]
     rows = db.list_jobs(
         ctx.conn,
         ctx.profile.id,
         q=query,
         min_score=min_score,
+        min_scan_score=min_scan,
         source=source,
         one_per_company=bool(ctx.prefs.one_application_per_company),
         limit=limit,
+        sort_by="scan",
     )
     jobs = []
     for row in rows:
         meta = row.get("meta") or {}
+        scan = row.get("scan") or {}
         jobs.append(
             {
                 "job_id": row.get("id"),
                 "company": row.get("company"),
                 "title": row.get("title"),
                 "location": row.get("location"),
-                "fit": round(float(row.get("score") or 0), 1),
-                "pursuit": round(float(meta.get("pursuit") or 0), 1),
+                "scan": scan.get("score"),
+                "scan_confidence": scan.get("confidence"),
+                "scan_band": scan.get("band") or "",
+                "competition_profile": scan.get("competition_profile") or "",
+                "age_days": scan.get("age_days"),
+                "scan_reasons": list(scan.get("reasons") or [])[:6],
+                "fit": round(float(row.get("score") or 0), 1) if row.get("score") is not None else None,
+                "pursuit": round(float(meta.get("pursuit") or 0), 1) if meta else None,
                 "gaps": list(row.get("gaps") or [])[:5],
                 "source": row.get("source"),
                 "posted_at": row.get("posted_at"),
@@ -437,11 +453,10 @@ def _tool_scan(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
         }
     source = str(args.get("source") or "").strip()[:60]
     stats = services.scan(ctx.config, ctx.conn, only=[source] if source else None)
-    try:
-        scored = services.rescore(ctx.config, ctx.conn, only_unscored=True)
-        stats["scored"] = scored
-    except Exception as exc:  # noqa: BLE001 - scanning succeeded; scoring is separable
-        stats["score_error"] = str(exc)
+    stats["next"] = (
+        "Scan ranking is complete. Use search_jobs to inspect scan scores; "
+        "call score_jobs only for the jobs the human wants to pursue."
+    )
     return stats
 
 
@@ -526,6 +541,7 @@ def create_tool_registry(ctx: ToolContext) -> list[ToolSpec]:
                 "properties": {
                     "query": {"type": "string"},
                     "min_score": {"type": "number", "minimum": 0, "maximum": 100},
+                    "min_scan": {"type": "number", "minimum": 0, "maximum": 100},
                     "source": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 50},
                 },

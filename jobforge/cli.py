@@ -598,30 +598,68 @@ def cmd_scan(args) -> int:
     cfg, conn = _connect(args)
     if args.board:
         from .sources.registry import get_source
+        from .scan.quick import competition_profile, quick_scan
 
         run_id = db.start_run(conn, "scan")
         try:
             jobs = get_source(args.source).fetch(args.board)
+            profile, prefs = services.require_profile(cfg, conn)
+            archetypes = services.load_archetypes(cfg) if not getattr(args, "no_quick", False) else {}
             new = 0
+            scored = 0
             for job in jobs:
                 before = conn.execute("SELECT id FROM jobs WHERE fingerprint=?", (job.fingerprint,)).fetchone()
-                db.upsert_job(conn, job)
+                job.id = db.upsert_job(conn, job)
                 new += 1 if before is None else 0
-            stats = {"source": args.source, "board": args.board, "fetched": len(jobs), "new": new}
+                if not getattr(args, "no_quick", False):
+                    job.competition_profile = competition_profile(job)
+                    db.set_scan(
+                        conn,
+                        quick_scan(
+                            job,
+                            profile=profile,
+                            prefs=prefs,
+                            archetypes=archetypes,
+                            scan_cfg=cfg.scan,
+                        ),
+                    )
+                    scored += 1
+            stats = {
+                "source": args.source,
+                "board": args.board,
+                "fetched": len(jobs),
+                "new": new,
+                "scanned": scored,
+            }
             db.finish_run(conn, run_id, RunStatus.OK.value, stats)
         except Exception as exc:
             db.finish_run(conn, run_id, RunStatus.FAILED.value, {"error": str(exc)})
             print(f"Scan failed: {exc}", file=sys.stderr)
             return 1
     else:
-        stats = services.scan(cfg, conn, only=args.source, urls=args.url)
+        stats = services.scan(
+            cfg,
+            conn,
+            only=args.source,
+            urls=args.url,
+            apply_filters=not getattr(args, "no_filter", False),
+            quick=not getattr(args, "no_quick", False),
+        )
     _print(stats)
-    return 0 if not stats.get("errors") else 2
+    processed = bool(stats.get("new") or stats.get("seen") or stats.get("scanned"))
+    return 0 if not stats.get("errors") or processed else 2
 
 
 def cmd_score(args) -> int:
     cfg, conn = _connect(args)
-    _print(services.rescore(cfg, conn))
+    _print(
+        services.rescore(
+            cfg,
+            conn,
+            job_ids=getattr(args, "job", None),
+            top=getattr(args, "top", None),
+        )
+    )
     return 0
 
 
@@ -670,16 +708,27 @@ def cmd_jobs(args) -> int:
         profile.id,
         q=args.query,
         min_score=args.min_score,
+        min_scan_score=getattr(args, "min_scan", None),
         one_per_company=prefs.one_application_per_company,
         limit=args.limit,
+        sort_by=getattr(args, "sort", "scan"),
     )
     for row in rows:
         pursuit = (row.get("meta") or {}).get("pursuit")
         comp = (row.get("meta") or {}).get("comp", {}).get("verdict", "")
+        scan = row.get("scan") or {}
+        scan_score = scan.get("score")
+        confidence = scan.get("confidence")
+        profile_tag = scan.get("competition_profile") or ""
+        fit = row.get("score")
+        fit_text = f"{float(fit):>5.1f}" if fit is not None else "    —"
+        pursuit_text = f"{float(pursuit):>5.1f}" if pursuit is not None else "    —"
         print(
-            f"{row['id']:>4}  fit {row.get('score') or 0:>5.1f}  "
-            f"pursuit {float(pursuit or 0):>5.1f}  {row['company'][:22]:22}  "
-            f"{row['title'][:46]:46}  {row.get('location','')[:20]:20}  {comp}"
+            f"{row['id']:>4}  scan {scan_score if scan_score is not None else 0:>5.1f} "
+            f"({confidence if confidence is not None else 0:>3.0f})  "
+            f"fit {fit_text}  pursuit {pursuit_text}  {profile_tag:14}  "
+            f"{row['company'][:20]:20}  {row['title'][:42]:42}  "
+            f"{row.get('location','')[:18]:18}  {comp}"
         )
     return 0
 
@@ -1389,13 +1438,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="initialize the database and profile")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("scan", help="fetch jobs from configured sources or URLs")
+    p = sub.add_parser("scan", help="fetch, filter, and quick-score jobs")
     p.add_argument("--source", help="only this source")
     p.add_argument("--board", help="a single board slug for --source")
     p.add_argument("--url", action="append", help="fetch a single job URL (repeatable)")
+    p.add_argument("--no-filter", action="store_true", help="keep every fetched row")
+    p.add_argument("--no-quick", action="store_true", help="skip quick scan scoring")
     p.set_defaults(func=cmd_scan)
 
-    p = sub.add_parser("score", help="rescore every job")
+    p = sub.add_parser("score", help="deep-score jobs (all, --top N, or --job ID)")
+    p.add_argument("--top", type=int, help="deep-score the top N scan-ranked jobs")
+    p.add_argument("--job", type=int, action="append", help="deep-score one job id (repeatable)")
     p.set_defaults(func=cmd_score)
 
     p = sub.add_parser("tailor", help="generate a tailored resume for a job")
@@ -1419,9 +1472,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hold", type=int, default=0, help="keep the browser open for N seconds instead of waiting for Enter")
     p.set_defaults(func=cmd_apply)
 
-    p = sub.add_parser("jobs", help="list jobs by match score")
+    p = sub.add_parser("jobs", help="list jobs by scan or fit score")
     p.add_argument("--query", default="")
-    p.add_argument("--min-score", type=float, default=None)
+    p.add_argument("--min-score", type=float, default=None, help="minimum deep fit")
+    p.add_argument("--min-scan", type=float, default=None, help="minimum quick scan score")
+    p.add_argument("--sort", choices=["scan", "fit", "recent"], default="scan")
     p.add_argument("--limit", type=int, default=30)
     p.set_defaults(func=cmd_jobs)
 

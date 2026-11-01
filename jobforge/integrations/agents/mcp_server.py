@@ -212,6 +212,7 @@ def create_server(
     def jobforge_search_jobs(
         query: Query | None = None,
         min_fit: MinFit | None = None,
+        min_scan: MinFit | None = None,
         source: Source | None = None,
         limit: Limit | None = None,
         cursor: Cursor | None = None,
@@ -225,6 +226,7 @@ def create_server(
                 {
                     "query": query,
                     "min_fit": min_fit,
+                    "min_scan": min_scan,
                     "source": source,
                     "limit": limit,
                     "cursor": cursor,

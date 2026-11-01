@@ -9,7 +9,7 @@ import yaml
 
 from jobforge import cli, db
 from jobforge.config import Config, BrowserConfig, EmailConfig, LLMConfig, ServerConfig
-from jobforge.models import Application, Job, MatchResult, Preferences, Profile
+from jobforge.models import Application, Job, MatchResult, Preferences, Profile, ScanResult
 from jobforge.workbench.authorization import load_query_context
 from jobforge.workbench.contracts import (
     ToolError,
@@ -403,7 +403,7 @@ def test_tool_list_marks_scope_availability(tmp_path: Path):
 def test_schema_v6_connections_export_and_delete(tmp_path: Path):
     cfg = _config(tmp_path)
     conn = db.connect(cfg.db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
     profile_id = db.save_profile(conn, Profile(name="schema"))
     instance = db.create_agent_instance(conn, "local")
     connection = db.create_agent_connection(
@@ -576,3 +576,33 @@ def test_old_schema_returns_migration_required(tmp_path: Path):
     finally:
         conn.close()
     assert exc.value.code == "MIGRATION_REQUIRED"
+
+
+def test_search_jobs_is_scan_ranked_and_returns_scan_metadata(tmp_path: Path):
+    cfg, _profile_id, _job_id, _app_id, instance_id, connection_id = _seed(tmp_path)
+    conn, context = _context(cfg, instance_id, connection_id)
+    try:
+        scan = ScanResult(
+            job_id=2,
+            profile_id=context.profile_id,
+            scan_score=91.0,
+            confidence=80.0,
+            band="strong",
+            competition_profile="direct_ats",
+            age_days=2,
+            reasons=["new grad / entry", "remote USA"],
+            gaps=[],
+            meta={"components": {"level": 25}},
+        )
+        db.set_scan(conn, scan)
+        result = call_tool(context, "jobforge_search_jobs", {"limit": 2})
+        assert result["ok"] is True
+        first = result["data"]["jobs"][0]
+        assert first["job_id"] == 2
+        assert first["scan"] == 91.0
+        assert first["scan_confidence"] == 80.0
+        assert first["competition_profile"] == "direct_ats"
+        assert first["age_days"] == 2
+        assert first["scan_reasons"] == ["new grad / entry", "remote USA"]
+    finally:
+        conn.close()

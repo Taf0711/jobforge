@@ -263,19 +263,27 @@ def _search_jobs(context: QueryContext, params: dict[str, Any]) -> tuple[dict[st
     if params["min_fit"] is not None:
         where.append("m.score IS NOT NULL AND m.score >= ?")
         values.append(params["min_fit"])
+    if params.get("min_scan") is not None:
+        where.append("sm.scan_score IS NOT NULL AND sm.scan_score >= ?")
+        values.append(params["min_scan"])
     sql = f"""
         SELECT j.id AS job_id, j.company, j.title, j.location, j.remote, j.source,
                j.posted_at, m.score, m.scored_at, m.meta_json,
+               sm.scan_score, sm.confidence AS scan_confidence, sm.band AS scan_band,
+               sm.competition_profile AS scan_competition_profile, sm.age_days AS scan_age_days,
+               sm.reasons_json AS scan_reasons_json, sm.scanned_at AS scanned_at,
                a.status AS application_status
         FROM jobs j
         LEFT JOIN matches m ON m.job_id=j.id AND m.profile_id=?
+        LEFT JOIN scan_matches sm ON sm.job_id=j.id AND sm.profile_id=?
         LEFT JOIN applications a ON a.job_id=j.id AND a.profile_id=?
         LEFT JOIN hidden_jobs h ON h.job_id=j.id AND h.profile_id=?
         WHERE {' AND '.join(where)}
-        ORDER BY (m.score IS NULL) ASC, m.score DESC, j.id DESC
+        ORDER BY (sm.scan_score IS NULL) ASC, sm.scan_score DESC,
+                 (m.score IS NULL) ASC, m.score DESC, j.id DESC
         LIMIT ? OFFSET ?
     """
-    params_sql = [context.profile_id, context.profile_id, context.profile_id, *values, params["limit"] + 1, offset]
+    params_sql = [context.profile_id, context.profile_id, context.profile_id, context.profile_id, *values, params["limit"] + 1, offset]
     rows = context.conn.execute(sql, params_sql).fetchall()
     more = len(rows) > params["limit"]
     rows = rows[: params["limit"]]
@@ -292,6 +300,13 @@ def _search_jobs(context: QueryContext, params: dict[str, Any]) -> tuple[dict[st
                 "remote": bool(row["remote"]),
                 "source": _clean(row["source"], 40),
                 "posted_at": row["posted_at"] or None,
+                "scan": round(float(row["scan_score"]), 1) if row["scan_score"] is not None else None,
+                "scan_confidence": round(float(row["scan_confidence"]), 1) if row["scan_confidence"] is not None else None,
+                "scan_band": str(row["scan_band"] or ""),
+                "competition_profile": str(row["scan_competition_profile"] or ""),
+                "age_days": row["scan_age_days"],
+                "scan_reasons": json.loads(row["scan_reasons_json"] or "[]")[:6],
+                "scan_scored_at": row["scanned_at"] or None,
                 "fit": round(float(row["score"]), 1) if row["score"] is not None else None,
                 "pursuit": round(float(pursuit), 1) if pursuit is not None else None,
                 "scored_at": row["scored_at"] or None,
@@ -311,6 +326,7 @@ def _get_job(context: QueryContext, params: dict[str, Any]) -> tuple[dict[str, A
     if job is None:
         raise ToolError("NOT_FOUND", "Job not found.")
     match = db.get_match(context.conn, int(params["job_id"]), context.profile_id)
+    scan = db.get_scan(context.conn, int(params["job_id"]), context.profile_id)
     scored = context.conn.execute(
         "SELECT scored_at FROM matches WHERE job_id=? AND profile_id=?",
         (job.id, context.profile_id),
@@ -329,6 +345,12 @@ def _get_job(context: QueryContext, params: dict[str, Any]) -> tuple[dict[str, A
         "salary_currency": _clean(job.salary_currency, 8),
         "url": _sanitize_url_list(job.url),
         "apply_url": _sanitize_url_list(job.apply_url),
+        "scan": round(float(scan.scan_score), 1) if scan else None,
+        "scan_confidence": round(float(scan.confidence), 1) if scan else None,
+        "scan_band": scan.band if scan else "",
+        "competition_profile": scan.competition_profile if scan else "",
+        "age_days": scan.age_days if scan else None,
+        "scan_reasons": list(scan.reasons)[:6] if scan else [],
         "fit": round(float(match.score), 1) if match else None,
         "coverage": round(float(match.coverage), 3) if match else None,
         "gate_survival": round(float(match.gate_survival), 3) if match else None,

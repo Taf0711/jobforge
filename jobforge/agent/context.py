@@ -285,16 +285,20 @@ def _market_context(
     if conn is None or profile.id is None:
         return {"top_jobs": [], "counts": {}}
     counts = db.stats(conn, profile.id)
-    rows = db.list_jobs(conn, profile.id, min_score=0, limit=limit)
+    rows = db.list_jobs(conn, profile.id, min_score=0, limit=limit, sort_by="scan")
     top = []
     for row in rows:
         meta = row.get("meta") or {}
+        scan = row.get("scan") or {}
         top.append(
             {
                 "job_id": row.get("id"),
                 "company": row.get("company"),
                 "title": row.get("title"),
                 "location": row.get("location"),
+                "scan": scan.get("score"),
+                "scan_confidence": scan.get("confidence"),
+                "competition_profile": scan.get("competition_profile"),
                 "fit": round(float(row.get("score") or 0), 1),
                 "pursuit": round(float(meta.get("pursuit") or 0), 1),
                 "gaps": list(row.get("gaps") or [])[:5],

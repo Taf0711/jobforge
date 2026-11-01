@@ -408,9 +408,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         jobs = db.list_jobs(
             conn,
             profile.id,
-            min_score=ctx["prefs"].min_match,
             one_per_company=ctx["prefs"].one_application_per_company,
             limit=6,
+            sort_by="scan",
         )
         graph = services.load_network(cfg)
         if graph:
@@ -438,7 +438,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             operation["job_company"] = job.company if job else ""
             operation["job_title"] = job.title if job else ""
         github_lead_jobs = db.list_jobs(
-            conn, profile.id, source="github_jobs", min_score=0, limit=3
+            conn, profile.id, source="github_jobs", min_score=0, limit=3, sort_by="scan"
         )
         github_lead_count = conn.execute(
             "SELECT COUNT(*) AS n FROM jobs WHERE source='github_jobs'"
@@ -485,23 +485,36 @@ def create_app(config: Config | None = None) -> FastAPI:
         request: Request,
         q: str = "",
         min_score: float | None = None,
+        min_scan: float | None = None,
         source: str = "",
+        sort: str = "scan",
         conn: sqlite3.Connection = Depends(get_conn),
     ):
         ctx = context(request, conn)
+        sort = sort if sort in {"scan", "fit", "recent"} else "scan"
         rows = db.list_jobs(
             conn,
             ctx["profile"].id,
             q=q,
             min_score=min_score,
+            min_scan_score=min_scan,
             source=source,
             one_per_company=ctx["prefs"].one_application_per_company,
             limit=200,
+            sort_by=sort,
         )
         return templates.TemplateResponse(
             request=request,
             name="jobs.html",
-            context={**ctx, "jobs": rows, "q": q, "min_score": min_score, "source": source},
+            context={
+                **ctx,
+                "jobs": rows,
+                "q": q,
+                "min_score": min_score,
+                "min_scan": min_scan,
+                "source": source,
+                "sort": sort,
+            },
         )
 
     @app.get("/setup", response_class=HTMLResponse)
@@ -819,13 +832,9 @@ def create_app(config: Config | None = None) -> FastAPI:
             msg += " [" + ", ".join(f"{k}:{v}" for k, v in sorted(per_source.items())) + "]"
         if stats.get("errors"):
             msg += f", {len(stats['errors'])} errors"
-        # A scan only inserts jobs. Score just the unscored ones so new rows
-        # clear the dashboard/queue min_score filter without a second click.
-        try:
-            result = services.rescore(cfg, conn, only_unscored=True)
-            msg += f", scored {result['scored']}"
-        except Exception as exc:
-            msg += f", score failed: {exc}"
+        msg += f", {stats.get('scanned', 0)} quick-scored"
+        # Scan ranking is deliberately separate from deep fit. Use Rescore or
+        # `jobforge score --top N` when a human wants detailed fit.
         return RedirectResponse(f"/?msg={_msg(msg)}", status_code=303)
 
     @app.post("/score/run")

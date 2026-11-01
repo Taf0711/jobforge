@@ -56,6 +56,8 @@ def configured_boards(config: Config, name: str) -> list[str]:
 
 def fetch_configured(config: Config, only: list[str] | None = None) -> FetchReport:
     report = FetchReport()
+    if isinstance(only, str):
+        only = [only]
     names = only or list(SOURCES)
     for name in names:
         if name not in SOURCES:

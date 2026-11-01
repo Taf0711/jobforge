@@ -128,31 +128,41 @@ def _normalized_location(value: str) -> str:
     return text
 
 
-def _location_gate(job: Job, jd: JD, prefs: Preferences) -> tuple[float, str]:
+def _location_gate(
+    job: Job, jd: JD, prefs: Preferences
+) -> tuple[float, float, str, str]:
+    """Return (fit multiplier, relocation fit, reason, gap).
+
+    Location is a logistics/risk signal, not a fit knockout. The fit multiplier
+    stays 1.0; the relocation fit is passed to the cost-of-living pursuit
+    modifier. This mirrors resume-forge's gate model.
+    """
     remote = _role_is_remote(job, jd)
     if remote:
         if not _remote_scope_allowed(job.location or jd.location, prefs):
-            return 0.25, f"Remote scope outside your location preferences: {job.location}"
+            return 1.0, 0.25, "", f"Remote scope outside your location preferences: {job.location}"
         remote_wanted = (
             not prefs.locations
             or any("remote" in str(item).lower() for item in prefs.locations)
             or any("remote" in str(item).lower() for item in prefs.work_modes)
         )
         if remote_wanted:
-            return 1.0, "Remote role"
-        return 0.55, "Remote role outside your work-mode preference"
+            return 1.0, 1.0, "Remote role", ""
+        return 1.0, 0.6, "Remote role", "Remote role outside your work-mode preference"
     if not prefs.locations:
-        return 1.0, "No location preference"
+        return 1.0, 1.0, "No location preference", ""
     job_loc = _normalized_location(job.location or jd.location)
     if not job_loc:
-        return 0.8, "Location not listed"
+        return 1.0, 0.8, "Location not listed", "Location not listed"
     for wanted in prefs.locations:
         wanted = _normalized_location(wanted)
         if not wanted:
             continue
         if wanted in job_loc or job_loc in wanted:
-            return 1.0, f"Location match: {job.location}"
-    return 0.55, f"Location mismatch: {job.location}"
+            return 1.0, 1.0, f"Location match: {job.location}", ""
+    if prefs.open_to_relocation:
+        return 1.0, 0.6, "Location outside preferred; relocation possible", f"Relocation required: {job.location}"
+    return 1.0, 0.4, "Location outside preferred", f"Location mismatch: {job.location}"
 
 
 TITLE_GENERIC = {
@@ -219,7 +229,7 @@ def score_job(
     scoring_v2: bool = True,
 ) -> MatchResult:
     graph = graph or GRAPH
-    text = job.description or f"{job.title}\n{job.location}"
+    text = f"{job.title}\n{job.company}\n{job.location}\n{job.description or ''}"
     jd = parse_jd(text, title_hint=job.title, company_hint=job.company, location_hint=job.location)
 
     requirements = jd.requirements
@@ -313,8 +323,8 @@ def score_job(
     elif jd.sponsorship is True:
         gates.append((1.0, "Visa sponsorship available", ""))
 
-    loc_gate, loc_reason = _location_gate(job, jd, prefs)
-    gates.append((loc_gate, loc_reason, "" if loc_gate >= 0.8 else f"Location: {job.location}"))
+    loc_gate, relocation_fit, loc_reason, loc_gap = _location_gate(job, jd, prefs)
+    gates.append((loc_gate, loc_reason, loc_gap))
 
     title_gate, title_reason = _title_gate(job, prefs)
     gates.append((title_gate, title_reason, "" if title_gate >= 0.8 else "Title level mismatch"))
@@ -335,12 +345,21 @@ def score_job(
         r for r in jd.requirements
         if r.get("skill") and str(r.get("importance", "")).lower() in {"must", "nice"}
     ]
-    thin_jd = not parsed_skills
+    description = job.description or ""
+    lowered = description.lower()
+    lead_only = any(
+        marker in lowered
+        for marker in (
+            "community job list",
+            "open the employer posting",
+        )
+    )
+    thin_jd = lead_only or not parsed_skills
     score = round(100.0 * coverage_result.coverage * survival * (0.5 if thin_jd else 1.0), 1)
     reasons = [reason for _, reason, _ in gates if reason]
     gaps = [gap for _, _, gap in gates if gap] + coverage_result.gaps
     if thin_jd:
-        gaps.insert(0, "Job description is too thin to score reliably")
+        gaps.insert(0, "Job description is thin or lead-only; open the employer posting before trusting this fit")
     if coverage_result.coverage >= 0.75:
         reasons.insert(0, f"Strong skill coverage ({coverage_result.coverage:.0%})")
     elif coverage_result.coverage >= 0.5:
@@ -366,7 +385,7 @@ def score_job(
         policy=prefs.comp_policy,
     )
     location_mod, location_notes = location_economics(
-        location_text, salary_mid, loc_gate
+        location_text, salary_mid, relocation_fit
     )
     if comp["modifier"] > 0:
         reasons.append(f"Comp policy: {comp['verdict'].replace('_', ' ')} (+{comp['modifier']})")
@@ -382,7 +401,15 @@ def score_job(
     meta = {
         "pursuit": pursuit,
         "comp": comp,
-        "location": {"modifier": location_mod, "notes": location_notes},
+        "location": {
+            "modifier": location_mod,
+            "notes": location_notes,
+            "relocation_fit": relocation_fit,
+        },
+        "thin_jd": thin_jd,
+        "lead_only": lead_only,
+        "word_count": len(description.split()),
+        "parsed_skills": len(parsed_skills),
     }
 
     return MatchResult(

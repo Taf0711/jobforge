@@ -209,6 +209,7 @@ class WorkdaySource(JobSource):
         tenant, wd, site = parse_board(board)
         list_url = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
         company = company_from_board(tenant)
+        search_text = str(kwargs.get("search_text") or "").strip()
         jobs: list[Job] = []
         seen: set[str] = set()
         offset = 0
@@ -220,7 +221,7 @@ class WorkdaySource(JobSource):
                     "appliedFacets": {},
                     "limit": page_size,
                     "offset": offset,
-                    "searchText": "",
+                    "searchText": search_text,
                 },
             )
             postings = data.get("jobPostings") or []

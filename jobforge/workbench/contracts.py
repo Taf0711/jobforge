@@ -240,6 +240,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "properties": {
                 "query": {"type": "string", "maxLength": MAX_QUERY_CHARS},
                 "min_fit": {"type": "number", "minimum": 0, "maximum": 100},
+                "min_scan": {"type": "number", "minimum": 0, "maximum": 100},
                 "source": {"type": "string", "maxLength": 40},
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_PAGE},
                 "cursor": {"type": "string", "maxLength": MAX_CURSOR_CHARS},
@@ -445,10 +446,11 @@ def validate_tool_input(tool: str, payload: Any) -> dict[str, Any]:
         _reject_extra(payload, set())
         return {}
     if tool == "jobforge_search_jobs":
-        _reject_extra(payload, {"query", "min_fit", "source", "limit", "cursor"})
+        _reject_extra(payload, {"query", "min_fit", "min_scan", "source", "limit", "cursor"})
         return {
             "query": _string_field(payload, "query"),
             "min_fit": _number_field(payload, "min_fit", low=0, high=100),
+            "min_scan": _number_field(payload, "min_scan", low=0, high=100),
             "source": _string_field(payload, "source", max_chars=40),
             "limit": _int_field(payload, "limit", default=DEFAULT_PAGE, low=1, high=MAX_PAGE),
             "cursor": _string_field(payload, "cursor", max_chars=MAX_CURSOR_CHARS),

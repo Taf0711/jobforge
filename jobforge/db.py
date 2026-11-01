@@ -19,10 +19,11 @@ from .models import (
     Preferences,
     Profile,
     RunStatus,
+    ScanResult,
     utcnow,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -82,6 +83,23 @@ CREATE TABLE IF NOT EXISTS matches (
     PRIMARY KEY (job_id, profile_id)
 );
 CREATE INDEX IF NOT EXISTS idx_matches_score ON matches(profile_id, score);
+
+CREATE TABLE IF NOT EXISTS scan_matches (
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    scan_score REAL NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    band TEXT NOT NULL DEFAULT '',
+    competition_profile TEXT NOT NULL DEFAULT '',
+    age_days INTEGER,
+    reasons_json TEXT NOT NULL DEFAULT '[]',
+    gaps_json TEXT NOT NULL DEFAULT '[]',
+    meta_json TEXT NOT NULL DEFAULT '{}',
+    model_version TEXT NOT NULL,
+    scanned_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, profile_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scan_matches_score ON scan_matches(profile_id, scan_score);
 
 CREATE TABLE IF NOT EXISTS applications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -323,6 +341,7 @@ def init_db(path: str | Path) -> None:
 
 
 def _job_from_row(row: sqlite3.Row) -> Job:
+    raw = json.loads(row["raw_json"] or "{}")
     return Job(
         id=row["id"],
         source=row["source"],
@@ -340,11 +359,15 @@ def _job_from_row(row: sqlite3.Row) -> Job:
         posted_at=row["posted_at"],
         discovered_at=row["discovered_at"],
         fingerprint=row["fingerprint"],
-        raw=json.loads(row["raw_json"] or "{}"),
+        raw=raw,
+        competition_profile=str(raw.get("competition_profile") or ""),
     )
 
 
 def upsert_job(conn: sqlite3.Connection, job: Job) -> int:
+    raw = dict(job.raw)
+    if job.competition_profile:
+        raw["competition_profile"] = job.competition_profile
     conn.execute(
         """
         INSERT INTO jobs (source, source_id, company, title, location, remote,
@@ -383,7 +406,7 @@ def upsert_job(conn: sqlite3.Connection, job: Job) -> int:
             job.posted_at,
             job.discovered_at,
             job.fingerprint,
-            json.dumps(job.raw, ensure_ascii=False),
+            json.dumps(raw, ensure_ascii=False),
         ),
     )
     row = conn.execute("SELECT id FROM jobs WHERE fingerprint=?", (job.fingerprint,)).fetchone()
@@ -401,6 +424,7 @@ def list_jobs(
     profile_id: int | None = None,
     q: str = "",
     min_score: float | None = None,
+    min_scan_score: float | None = None,
     source: str = "",
     status: str = "",
     include_hidden: bool = False,
@@ -408,6 +432,7 @@ def list_jobs(
     limit: int = 100,
     offset: int = 0,
     exclude_sources: list[str] | None = None,
+    sort_by: str = "fit",
 ) -> list[dict[str, Any]]:
     where = ["1=1"]
     params: list[Any] = []
@@ -430,6 +455,9 @@ def list_jobs(
     if min_score is not None:
         where.append("COALESCE(m.score,0) >= ?")
         params.append(min_score)
+    if min_scan_score is not None:
+        where.append("COALESCE(sm.scan_score,0) >= ?")
+        params.append(min_scan_score)
     if status:
         where.append("a.status=?")
         params.append(status)
@@ -445,21 +473,34 @@ def list_jobs(
     if profile_id is None:
         profile_id = -1
 
+    if sort_by == "scan":
+        order = "COALESCE(sm.scan_score, -1) DESC, COALESCE(m.score, 0) DESC, COALESCE(j.posted_at, j.discovered_at) DESC"
+    elif sort_by == "recent":
+        order = "COALESCE(j.posted_at, j.discovered_at) DESC, COALESCE(sm.scan_score, -1) DESC"
+    else:
+        order = "COALESCE(m.score, 0) DESC, COALESCE(sm.scan_score, -1) DESC, COALESCE(j.posted_at, j.discovered_at) DESC"
+
     sql = f"""
         SELECT j.*, m.score, m.coverage, m.gate_survival, m.reasons_json, m.gaps_json,
                m.requirements_json, m.meta_json, m.scored_at,
+               sm.scan_score AS scan_score, sm.confidence AS scan_confidence,
+               sm.band AS scan_band, sm.competition_profile AS scan_competition_profile,
+               sm.age_days AS scan_age_days, sm.reasons_json AS scan_reasons_json,
+               sm.gaps_json AS scan_gaps_json, sm.meta_json AS scan_meta_json,
+               sm.scanned_at AS scanned_at,
                a.id AS application_id, a.status AS application_status,
                CASE WHEN s.job_id IS NULL THEN 0 ELSE 1 END AS saved
         FROM jobs j
         LEFT JOIN matches m ON m.job_id=j.id AND m.profile_id=?
+        LEFT JOIN scan_matches sm ON sm.job_id=j.id AND sm.profile_id=?
         LEFT JOIN applications a ON a.job_id=j.id AND a.profile_id=?
         LEFT JOIN saved_jobs s ON s.job_id=j.id AND s.profile_id=?
         LEFT JOIN hidden_jobs h ON h.job_id=j.id AND h.profile_id=?
         WHERE {' AND '.join(where)}
-        ORDER BY COALESCE(m.score, 0) DESC, COALESCE(j.posted_at, j.discovered_at) DESC
+        ORDER BY {order}
         LIMIT ? OFFSET ?
     """
-    rows = conn.execute(sql, [profile_id, profile_id, profile_id, profile_id, *params, limit, offset]).fetchall()
+    rows = conn.execute(sql, [profile_id, profile_id, profile_id, profile_id, profile_id, *params, limit, offset]).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
         d = dict(row)
@@ -469,6 +510,28 @@ def list_jobs(
         d["requirements"] = json.loads(d.pop("requirements_json") or "[]")
         d["meta"] = json.loads(d.pop("meta_json") or "{}")
         d["saved"] = bool(d["saved"])
+        if d.get("scan_score") is not None:
+            d["scan"] = {
+                "score": round(float(d["scan_score"]), 1),
+                "confidence": round(float(d.get("scan_confidence") or 0), 1),
+                "band": d.get("scan_band") or "",
+                "competition_profile": d.get("scan_competition_profile") or "",
+                "age_days": d.get("scan_age_days"),
+                "reasons": json.loads(d.pop("scan_reasons_json") or "[]"),
+                "gaps": json.loads(d.pop("scan_gaps_json") or "[]"),
+                "meta": json.loads(d.pop("scan_meta_json") or "{}"),
+                "scanned_at": d.get("scanned_at"),
+            }
+        else:
+            d["scan"] = None
+            d.pop("scan_confidence", None)
+            d.pop("scan_band", None)
+            d.pop("scan_competition_profile", None)
+            d.pop("scan_age_days", None)
+            d.pop("scan_reasons_json", None)
+            d.pop("scan_gaps_json", None)
+            d.pop("scan_meta_json", None)
+            d.pop("scanned_at", None)
         out.append(d)
     return out
 
@@ -520,6 +583,68 @@ def set_match(conn: sqlite3.Connection, m: MatchResult) -> None:
         ),
     )
     conn.commit()
+
+
+def set_scan(conn: sqlite3.Connection, scan: ScanResult) -> None:
+    conn.execute(
+        """
+        INSERT INTO scan_matches (job_id, profile_id, scan_score, confidence, band,
+                                  competition_profile, age_days, reasons_json, gaps_json,
+                                  meta_json, model_version, scanned_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(job_id, profile_id) DO UPDATE SET
+            scan_score=excluded.scan_score, confidence=excluded.confidence,
+            band=excluded.band, competition_profile=excluded.competition_profile,
+            age_days=excluded.age_days, reasons_json=excluded.reasons_json,
+            gaps_json=excluded.gaps_json, meta_json=excluded.meta_json,
+            model_version=excluded.model_version, scanned_at=excluded.scanned_at
+        """,
+        (
+            scan.job_id,
+            scan.profile_id,
+            scan.scan_score,
+            scan.confidence,
+            scan.band,
+            scan.competition_profile,
+            scan.age_days,
+            json.dumps(scan.reasons, ensure_ascii=False),
+            json.dumps(scan.gaps, ensure_ascii=False),
+            json.dumps(scan.meta, ensure_ascii=False),
+            scan.model_version,
+            utcnow(),
+        ),
+    )
+    conn.commit()
+
+
+def delete_scan(conn: sqlite3.Connection, job_id: int, profile_id: int) -> None:
+    conn.execute(
+        "DELETE FROM scan_matches WHERE job_id=? AND profile_id=?",
+        (job_id, profile_id),
+    )
+    conn.commit()
+
+
+def get_scan(conn: sqlite3.Connection, job_id: int, profile_id: int) -> ScanResult | None:
+    row = conn.execute(
+        "SELECT * FROM scan_matches WHERE job_id=? AND profile_id=?",
+        (job_id, profile_id),
+    ).fetchone()
+    if not row:
+        return None
+    return ScanResult(
+        job_id=row["job_id"],
+        profile_id=row["profile_id"],
+        scan_score=row["scan_score"],
+        confidence=row["confidence"],
+        band=row["band"],
+        competition_profile=row["competition_profile"],
+        age_days=row["age_days"],
+        reasons=json.loads(row["reasons_json"] or "[]"),
+        gaps=json.loads(row["gaps_json"] or "[]"),
+        meta=json.loads(row["meta_json"] or "{}"),
+        model_version=row["model_version"],
+    )
 
 
 def get_match(conn: sqlite3.Connection, job_id: int, profile_id: int) -> MatchResult | None:

@@ -19,7 +19,8 @@ JobForge is a local-first, single-user job-search workbench. It runs on your mac
 jobforge/
   config.py, db.py, models.py   config, SQLite, dataclasses
   sources/                      public ATS + public-sector discovery
-  matching/                     resume/JD parsing, skill graph, fit scoring
+  scan/                         first-pass filters + quick scan ranking
+  matching/                     resume/JD parsing, skill graph, deep fit scoring
   tailoring/                    fact selection, grounding checks, Typst, ATS check
   automation/                   browser, form filling, cognition, decision model
   email/                        IMAP, verification codes, reply classification
@@ -39,20 +40,20 @@ jobforge/
 ### Discover
 
 ```text
-config boards → ATS fetch → normalize → fingerprint → upsert jobs
+sources → normalize → dedupe → first-pass filter → quick scan → scan_matches
 ```
 
-Direct ATS sources are board-based. USAJobs and NYC Open Data are singleton sources. `github_jobs` keeps direct employer/ATS links only. Discovery is not verification; open the posting before tailoring.
+Direct ATS sources are board-based. USAJobs and NYC Open Data are singleton sources. `github_jobs` keeps direct employer/ATS links only. A flat `scan_sources.yml` registry can replace the grouped boards and carries an explicit `competition_profile`. Discovery is not verification; open the posting before tailoring.
 
-### Score
+### Deep score
 
 ```text
-profile skills + skill graph → coverage with partial credit
-job requirements → hard gates (location, auth, years, degree, clearance)
-fit = coverage × gate survival × 100
+selected jobs + profile skills + skill graph → coverage with partial credit
+job requirements → hard gates (auth, years, degree, clearance, location risk)
+fit = coverage × gate survival × thin/lead-only penalty × 100
 ```
 
-Every match stores reasons, gaps, and a per-requirement table.
+Location is a risk/gap and a pursuit modifier, not a fit knockout. Every match stores reasons, gaps, and a per-requirement table. Scan ranking and deep fit are separate; scanning does not deep-score every row.
 
 ### Tailor
 
@@ -100,7 +101,8 @@ Queue items and approved operations carry an explicit profile binding. Execution
 
 - `npx jobforge` — install the MCP server and skill into local agents.
 - `jobforge app` — local console.
-- `jobforge scan` / `score` — discovery and scoring.
+- `jobforge scan` — discovery, filtering, and quick ranking.
+- `jobforge score --top 20` / `--job 42` — deep fit on demand.
 - `jobforge tailor --job 42` — resume PDF.
 - `jobforge apply --job 42` — fill and review.
 - `jobforge queue ...` — supervised queue.

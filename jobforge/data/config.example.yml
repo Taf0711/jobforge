@@ -37,6 +37,14 @@ scan:
   keywords: []            # e.g. [software engineer, backend, data engineer]
   exclude_keywords: []    # e.g. [senior, staff, principal]
   max_new: 250
+  # Optional flat resume-forge registry. When present, JobForge uses it instead
+  # of the grouped `sources:` section above. Paths are relative to config.yml.
+  sources_path: ""
+  max_age_days: 30
+  exclude_non_us: true
+  exclude_internships: true
+  exclude_senior: true
+  recent_rejection_days: 60
 
 # Seed preferences on first run. Stored in SQLite afterwards.
 preferences:

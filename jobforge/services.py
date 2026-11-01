@@ -13,7 +13,7 @@ from typing import Any
 from . import db, quality
 from .config import Config
 from .matching.resume import load_profile_file, merge_profiles, profile_from_resume
-from .matching.score import score_all
+from .matching.score import score_all, score_job
 from .models import (
     Application,
     ApplicationStatus,
@@ -29,6 +29,7 @@ from .paths import base_dir
 from .sources.base import SourceError
 from .sources.direct import fetch_job_url
 from .sources.registry import fetch_configured
+from .scan.service import scan_jobs
 from .tailoring.llm import LLMClient
 from .tailoring.tailor import tailor_resume
 
@@ -164,66 +165,32 @@ def scan(
     *,
     only: list[str] | None = None,
     urls: list[str] | None = None,
+    apply_filters: bool = True,
+    quick: bool = True,
 ) -> dict[str, Any]:
+    """Fetch, dedupe, filter, and quick-score jobs.
+
+    The old grouped ``sources:`` config still works. If ``scan.sources_path``
+    points at a flat resume-forge registry, that registry is used instead.
+    Deep fit is a separate action; scan ranking is intentionally cheap.
+    """
+    profile, prefs = require_profile(config, conn)
     run_id = db.start_run(conn, "scan")
-    stats: dict[str, Any] = {
-        "new": 0,
-        "seen": 0,
-        "filtered": 0,
-        "deferred": 0,
-        "errors": [],
-        "per_source": {},
-    }
     try:
-        jobs: list[Job] = []
-        if urls:
-            for url in urls:
-                try:
-                    jobs.append(fetch_job_url(url))
-                except Exception as exc:
-                    stats["errors"].append(f"{url}: {exc}")
-        else:
-            report = fetch_configured(config, only=only)
-            jobs = report.jobs
-            stats["errors"] = report.errors
-            stats["per_source"] = report.per_source
-            scan_cfg = config.scan or {}
-            include = [
-                str(k).strip().lower()
-                for k in (scan_cfg.get("keywords") or [])
-                if str(k).strip()
-            ]
-            exclude = [
-                str(k).strip().lower()
-                for k in (scan_cfg.get("exclude_keywords") or [])
-                if str(k).strip()
-            ]
-            if include or exclude:
-                before_filter = len(jobs)
-                jobs = [
-                    job
-                    for job in jobs
-                    if (not include or any(k in (job.title or "").lower() for k in include))
-                    and not any(k in (job.title or "").lower() for k in exclude)
-                ]
-                stats["filtered"] = before_filter - len(jobs)
-            # Freshest first; the cap keeps the first web scan from turning
-            # into a multi-minute deep-score request.
-            jobs.sort(
-                key=lambda job: ((job.posted_at or ""), (job.title or "").lower()),
-                reverse=True,
-            )
-        max_new = 0 if urls else int((config.scan or {}).get("max_new") or 0)
-        for job in jobs:
-            before = conn.execute("SELECT id FROM jobs WHERE fingerprint=?", (job.fingerprint,)).fetchone()
-            if before is None and max_new > 0 and stats["new"] >= max_new:
-                stats["deferred"] += 1
-                continue
-            db.upsert_job(conn, job)
-            stats["new" if before is None else "seen"] += 1
-        status = RunStatus.OK
-    except Exception as exc:
-        stats["errors"].append(str(exc))
+        stats = scan_jobs(
+            config,
+            conn,
+            profile,
+            prefs,
+            only=only,
+            urls=urls,
+            apply_filters=apply_filters,
+            quick=quick,
+        )
+        processed = bool(stats.get("new") or stats.get("seen") or stats.get("scanned"))
+        status = RunStatus.FAILED if stats.get("errors") and not processed else RunStatus.OK
+    except Exception as exc:  # noqa: BLE001 - the run row records the failure
+        stats = {"errors": [str(exc)]}
         status = RunStatus.FAILED
     db.finish_run(conn, run_id, status.value, stats)
     return stats
@@ -231,18 +198,54 @@ def scan(
 
 @locked_action
 def rescore(
-    config: Config, conn: sqlite3.Connection, *, only_unscored: bool = False
+    config: Config,
+    conn: sqlite3.Connection,
+    *,
+    only_unscored: bool = False,
+    job_ids: list[int] | None = None,
+    top: int | None = None,
 ) -> dict[str, Any]:
     profile, prefs = require_profile(config, conn)
     run_id = db.start_run(conn, "score")
     try:
-        result = score_all(
-            conn,
-            profile,
-            prefs,
-            only_unscored=only_unscored,
-            scoring_v2=config.features.scoring_v2,
-        )
+        if job_ids or top:
+            jobs: list[Job] = []
+            if job_ids:
+                for job_id in job_ids:
+                    job = db.get_job(conn, int(job_id))
+                    if job is not None:
+                        jobs.append(job)
+            else:
+                rows = db.list_jobs(
+                    conn,
+                    profile.id,
+                    limit=max(1, min(int(top or 0), 500)),
+                    sort_by="scan",
+                )
+                for row in rows:
+                    job = db.get_job(conn, int(row["id"]))
+                    if job is not None:
+                        jobs.append(job)
+            comp_counts: dict[str, int] = {}
+            for job in jobs:
+                result = score_job(
+                    job,
+                    profile,
+                    prefs,
+                    scoring_v2=config.features.scoring_v2,
+                )
+                db.set_match(conn, result)
+                verdict = str(result.meta.get("comp", {}).get("verdict", "unknown"))
+                comp_counts[verdict] = comp_counts.get(verdict, 0) + 1
+            result = {"scored": len(jobs), "total": len(jobs), "comp": comp_counts}
+        else:
+            result = score_all(
+                conn,
+                profile,
+                prefs,
+                only_unscored=only_unscored,
+                scoring_v2=config.features.scoring_v2,
+            )
         db.finish_run(conn, run_id, RunStatus.OK.value, result)
         return result
     except Exception as exc:
@@ -582,6 +585,7 @@ def job_context(
     if not job:
         return None
     match = db.get_match(conn, job_id, profile_id)
+    scan = db.get_scan(conn, job_id, profile_id)
     app = conn.execute(
         "SELECT * FROM applications WHERE job_id=? AND profile_id=?", (job_id, profile_id)
     ).fetchone()
@@ -596,6 +600,7 @@ def job_context(
     return {
         "job": asdict(job),
         "match": asdict(match) if match else None,
+        "scan": asdict(scan) if scan else None,
         "application": application,
         "warm": warm,
     }
