@@ -191,6 +191,19 @@ def _has_entry(spec: HostSpec, data: dict[str, Any]) -> bool:
     return _server_entry(spec, data) is not None
 
 
+def _entry_enabled(spec: HostSpec, data: dict[str, Any]) -> bool:
+    """Return True when the MCP entry exists and is not explicitly disabled."""
+    entry = _server_entry(spec, data)
+    if entry is None:
+        return False
+    if not isinstance(entry, dict):
+        return True
+    enabled = entry.get("enabled", True)
+    if isinstance(enabled, str):
+        return enabled.strip().lower() not in {"false", "0", "no", "off"}
+    return bool(enabled) if enabled is not None else True
+
+
 def _host_cli(spec: HostSpec) -> str | None:
     if not spec.cli:
         return None
@@ -230,13 +243,19 @@ def _remove_command(spec: HostSpec) -> list[str] | None:
     return None
 
 
-def _run(command: Sequence[str], *, timeout: int = 90) -> subprocess.CompletedProcess[str]:
+def _run(
+    command: Sequence[str],
+    *,
+    timeout: int = 90,
+    input: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             list(command),
             capture_output=True,
             text=True,
             timeout=timeout,
+            input=input,
         )
     except FileNotFoundError as exc:
         raise InstallerError("COMMAND_NOT_FOUND", f"Command not found: {command[0]}") from exc
@@ -342,7 +361,7 @@ def detect_hosts(home: str | Path | None = None) -> list[dict[str, Any]]:
         entry_present = False
         if config_exists:
             try:
-                entry_present = _has_entry(spec, _read_configuration(spec))
+                entry_present = _entry_enabled(spec, _read_configuration(spec))
             except InstallerError:
                 entry_present = False
         out.append(
@@ -371,7 +390,7 @@ def _plan_host(
     connection = _find_connection(conn, profile_id, spec.id)
     try:
         config = _read_configuration(spec)
-        entry_present = _has_entry(spec, config)
+        entry_present = _entry_enabled(spec, config)
     except InstallerError:
         entry_present = False
     cli_path = _host_cli(spec)
@@ -512,10 +531,15 @@ def _configure_host(spec: HostSpec, server_command: Sequence[str]) -> str:
     cli_path = _host_cli(spec)
     add = _add_command(spec, server_command)
     if cli_path and add:
+        add = [cli_path, *add[1:]]
         remove = _remove_command(spec)
         if remove:
-            _run(remove)
-        result = _run(add)
+            remove = [cli_path, *remove[1:]]
+            # Do not let a removal prompt consume terminal input during a TUI install.
+            _run(remove, input="" if spec.id == "hermes" else None)
+        # Hermes asks which discovered tools to enable and cancels without a TTY.
+        # Accept all of them; the tool list is the read-only JobForge surface.
+        result = _run(add, input="Y\n" if spec.id == "hermes" else None)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "unknown error").strip()[:500]
             raise InstallerError("HOST_CLI_FAILED", f"{spec.label} rejected the MCP entry: {detail}")
@@ -594,10 +618,17 @@ def apply_plan(
             backup = _backup_file(spec.config_path)
             skill_path, skill_backup = _export_skill(spec)
             method = _configure_host(spec, _connection_command(config, connection))
-            if not _has_entry(spec, _read_configuration(spec)):
+            written = _read_configuration(spec)
+            if not _has_entry(spec, written):
                 raise InstallerError(
                     "CONFIG_NOT_VERIFIED",
                     f"{spec.label} was configured but JobForge could not verify the entry in {spec.config_path}.",
+                )
+            if not _entry_enabled(spec, written):
+                raise InstallerError(
+                    "CONFIG_NOT_VERIFIED",
+                    f"{spec.label} saved the entry in {spec.config_path} but left it disabled; "
+                    "the host could not complete tool discovery.",
                 )
             results.append(
                 {
@@ -675,7 +706,7 @@ def doctor(
         spec = specs[host_id]
         connection = _find_connection(conn, int(profile.id or 0), spec.id)
         try:
-            config_present = _has_entry(spec, _read_configuration(spec))
+            config_present = _entry_enabled(spec, _read_configuration(spec))
         except InstallerError:
             config_present = False
         skill_present = _safe_exists(spec.skill_dir / SERVER_NAME / "SKILL.md")

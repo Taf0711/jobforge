@@ -2,6 +2,9 @@
 
 ## Unreleased — npm trusted publishing
 
+- Fixed the Hermes installer path: `hermes mcp add` now receives a non-interactive
+  answer to its tool-selection prompt, and the installer rejects entries the host
+  saved as disabled instead of reporting a false success.
 - Switched the npm installer workflow to GitHub OIDC trusted publishing.
 - The first `jobforge` npm publish is a one-time manual OTP bootstrap; later
   releases use the trusted publisher and need no long-lived token.

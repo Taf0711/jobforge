@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from jobforge import db
 from jobforge.config import BrowserConfig, Config, EmailConfig, LLMConfig, ServerConfig
@@ -195,6 +197,69 @@ def test_optional_browser_requires_explicit_consent(tmp_path: Path, monkeypatch)
     assert called == ["browser"]
     assert result["ok"] is True
     assert result["optional"][0]["id"] == "browser"
+
+
+def test_hermes_cli_prompt_is_answered_noninteractively(tmp_path: Path, monkeypatch):
+    cfg, conn, _pid = _config(tmp_path)
+    home = _home(tmp_path)
+    hermes_dir = home / ".hermes"
+    hermes_dir.mkdir(parents=True)
+    config_path = hermes_dir / "config.yaml"
+    config_path.write_text(
+        "mcp_servers:\n  existing:\n    command: old\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_hermes = bin_dir / "hermes"
+    fake_hermes.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "import yaml\n"
+        f"config = Path({str(config_path)!r})\n"
+        "data = yaml.safe_load(config.read_text()) or {}\n"
+        "args = sys.argv[1:]\n"
+        "servers = data.setdefault('mcp_servers', {})\n"
+        "if args[:2] == ['mcp', 'remove']:\n"
+        "    servers.pop('jobforge', None)\n"
+        "    config.write_text(yaml.safe_dump(data, sort_keys=False))\n"
+        "    raise SystemExit(0)\n"
+        "if args[:2] == ['mcp', 'add']:\n"
+        "    answer = sys.stdin.readline().strip().lower()\n"
+        "    if answer not in {'y', 'yes', ''}:\n"
+        "        print('Cancelled.')\n"
+        "        raise SystemExit(0)\n"
+        "    name = args[2]\n"
+        "    command = args[args.index('--command') + 1]\n"
+        "    tail = args[args.index('--args') + 1:]\n"
+        "    servers[name] = {'command': command, 'args': tail, 'enabled': True}\n"
+        "    config.write_text(yaml.safe_dump(data, sort_keys=False))\n"
+        "    print('Saved')\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    fake_hermes.chmod(0o755)
+    real_which = core.shutil.which
+
+    def fake_which(name: str) -> str | None:
+        if name == "hermes":
+            return str(fake_hermes)
+        return real_which(name)
+
+    monkeypatch.setattr(core.shutil, "which", fake_which)
+    monkeypatch.setattr(core, "_browser_ready", lambda home: (False, ""))
+
+    result = apply_plan(cfg, conn, ["hermes"], home=home)
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    conn.close()
+
+    assert result["ok"] is True, result
+    assert written["mcp_servers"]["jobforge"]["enabled"] is True
+    assert written["mcp_servers"]["jobforge"]["command"]
+    assert written["mcp_servers"]["existing"]["command"] == "old"
+    assert result["hosts"][0]["method"] == "host-cli"
 
 
 def test_unknown_host_is_rejected(tmp_path: Path):
