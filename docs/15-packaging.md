@@ -124,13 +124,34 @@ export.
 The `npx jobforge` wizard is the separate npm package in `installer/`. It is
 published independently from the Python wheel.
 
-- CI: `.github/workflows/publish-npm.yml` runs on `v*` tags and manual dispatch.
-  Add an npm **granular access token** as the `NPM_TOKEN` repository secret.
-- Granular token settings: **Read and write** package permission, **All
-  packages** for the first publish, and **Bypass two-factor authentication**
-  enabled. After `jobforge` exists, restrict the token to that package.
-- `installer/package.json` version must equal the tag without the leading `v`.
-- Manual local publish: `scripts/publish_npm.sh` (pass `--otp CODE` when npm asks
-  for a one-time password, or set `NODE_AUTH_TOKEN` to a granular token).
-- After the first publish, prefer npm trusted publishing for CI and remove the
-  long-lived token.
+The first publish is a one-time manual bootstrap. npm Trusted Publishing
+cannot create a brand-new package, and bypass-2FA tokens are not used here.
+
+```bash
+cd installer
+npm publish --access public
+# enter the 6-digit npm 2FA code when prompted
+```
+
+After `jobforge@0.5.2` exists, configure trusted publishing once on npm:
+
+- npmjs.com → `jobforge` → **Settings → Trusted Publisher → GitHub Actions**
+- Organization/user: `Taf0711`
+- Repository: `jobforge`
+- Workflow filename: `publish-npm.yml`
+- Environment: leave blank
+- Allowed action: `npm publish`
+
+Then `.github/workflows/publish-npm.yml` publishes future `v*` tags with GitHub
+OIDC. It uses `id-token: write`, requires npm 11.15+, and needs **no
+`NPM_TOKEN`**. The trusted publisher config must complete a successful publish
+within two days or it expires.
+
+`installer/package.json` version must equal the tag without the leading `v`, and
+its `repository.url` must remain `https://github.com/Taf0711/jobforge`.
+
+Manual local publish after bootstrap:
+
+```bash
+scripts/publish_npm.sh --otp 123456
+```

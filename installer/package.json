@@ -16,5 +16,16 @@
   "dependencies": {
     "@clack/prompts": "^1.8.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Taf0711/jobforge"
+  },
+  "homepage": "https://github.com/Taf0711/jobforge#readme",
+  "bugs": {
+    "url": "https://github.com/Taf0711/jobforge/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — npm trusted publishing
+
+- Switched the npm installer workflow to GitHub OIDC trusted publishing.
+- The first `jobforge` npm publish is a one-time manual OTP bootstrap; later
+  releases use the trusted publisher and need no long-lived token.
+- Added the npm repository metadata required for trusted publishing.
+
 ## 0.5.2 — UI refinement (2026-10-30)
 
 - Refined the console typography, spacing, surface depth, table scanability, and

@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -23,8 +24,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@^11.15.0
 
       - name: Verify package version matches tag
         env:
@@ -51,11 +56,10 @@ jobs:
         working-directory: installer
         run: npm pack --dry-run
 
-      # NPM_TOKEN is a granular access token with Read and write package
-      # permission and Bypass 2FA enabled. After the first publish, prefer
-      # npm trusted publishing and remove the token.
+      # npm Trusted Publishing uses GitHub OIDC. The package must already exist
+      # on npm, and its trusted publisher must point at this repository and
+      # workflow. The first version is bootstrapped manually; see
+      # docs/15-packaging.md.
       - name: Publish
         working-directory: installer
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish

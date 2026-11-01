@@ -24,12 +24,6 @@ echo "Publishing jobforge@$VERSION from $TAG"
 npm ci
 npm pack --dry-run
 
-args=(--access public --registry https://registry.npmjs.org/)
-if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
-  npmrc="$(mktemp)"
-  chmod 600 "$npmrc"
-  trap 'rm -f "$npmrc"' EXIT
-  printf '//registry.npmjs.org/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$npmrc"
-  args+=(--userconfig "$npmrc")
-fi
-npm publish "${args[@]}" "$@"
+# The first publish is manual and uses npm's interactive 2FA. Later releases
+# use OIDC trusted publishing from .github/workflows/publish-npm.yml.
+npm publish --access public --registry https://registry.npmjs.org/ "$@"
