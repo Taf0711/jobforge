@@ -135,12 +135,18 @@ npm publish --access public
 
 After `jobforge@0.5.2` exists, configure trusted publishing once on npm:
 
-- npmjs.com → `jobforge` → **Settings → Trusted Publisher → GitHub Actions**
-- Organization/user: `Taf0711`
-- Repository: `jobforge`
-- Workflow filename: `publish-npm.yml`
-- Environment: leave blank
-- Allowed action: `npm publish`
+```bash
+npm trust github jobforge \
+  --file publish-npm.yml \
+  --repo Taf0711/jobforge \
+  --allow-publish \
+  --yes
+npm trust list jobforge
+```
+
+Or use the UI: npmjs.com → `jobforge` → **Settings → Trusted Publisher →
+GitHub Actions** with user `Taf0711`, repository `jobforge`, workflow
+`publish-npm.yml`, environment blank, and `npm publish` allowed.
 
 Then `.github/workflows/publish-npm.yml` publishes future `v*` tags with GitHub
 OIDC. It uses `id-token: write`, requires npm 11.15+, and needs **no

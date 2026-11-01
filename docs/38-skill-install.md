@@ -8,7 +8,7 @@ JobForge installs into your coding agent instead of running as a separate chat a
 npx jobforge
 ```
 
-From a checkout before the npm release: `npx --yes --package ./installer jobforge`.
+From a checkout: `npx --yes --package ./installer jobforge`.
 
 No host arguments. The wizard detects local agents, shows what it will write, and asks before changing anything.
 

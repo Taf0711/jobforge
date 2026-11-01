@@ -28,7 +28,7 @@ Requires Python 3.11+, Typst 0.14+, and `uv` if JobForge is not installed yet.
 npx jobforge
 ```
 
-From a checkout before the npm release:
+From a checkout:
 
 ```bash
 npx --yes --package ./installer jobforge
