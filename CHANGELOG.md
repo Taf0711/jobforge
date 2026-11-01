@@ -1,10 +1,15 @@
 # Changelog
 
-## Unreleased — npm trusted publishing
+## 0.5.3 — Installer runtime updates (2026-11-01)
 
 - Fixed the Hermes installer path: `hermes mcp add` now receives a non-interactive
   answer to its tool-selection prompt, and the installer rejects entries the host
   saved as disabled instead of reporting a false success.
+- `npx jobforge` now checks the installed uv-managed runtime version and offers
+  to update a stale runtime to the installer's matching release tag. Use
+  `--update` to force or `--no-update` to skip.
+- Pinned the default npm runtime spec to `git+...@v${VERSION}` instead of
+  floating on `main`.
 - Switched the npm installer workflow to GitHub OIDC trusted publishing.
 - The first `jobforge` npm publish is a one-time manual OTP bootstrap; later
   releases use the trusted publisher and need no long-lived token.

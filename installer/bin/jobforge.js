@@ -29,14 +29,18 @@ function usage() {
 
 Usage:
   npx jobforge
+  npx jobforge --update
+  npx jobforge --no-update
 
 No arguments are required. The wizard detects your local agents, shows the
-exact files it will write, and installs the MCP server and Agent Skill.
+exact files it will write, and installs the MCP server and Agent Skill. It
+also updates a stale uv-managed JobForge runtime to this installer's version.
 
 Environment:
-  JOBFORGE_BIN       JobForge command to use (default: jobforge on PATH)
-  JOBFORGE_PYTHON    Python executable to use with \`-m jobforge\`
-  JOBFORGE_CONFIG    Path to config.yml
+  JOBFORGE_BIN            JobForge command to use (default: jobforge on PATH)
+  JOBFORGE_PYTHON         Python executable to use with \`-m jobforge\`
+  JOBFORGE_CONFIG         Path to config.yml
+  JOBFORGE_INSTALL_SPEC   Override the runtime install source
 `);
 }
 
@@ -48,11 +52,17 @@ function guard(value) {
   return value;
 }
 
-function commandExists(name) {
-  if (!name || name.includes(path.sep)) return existsSync(name);
+function whichPath(name) {
+  if (!name) return "";
+  if (name.includes(path.sep)) return existsSync(name) ? name : "";
   const finder = process.platform === "win32" ? "where" : "which";
-  const result = spawnSync(finder, [name], { stdio: "ignore" });
-  return result.status === 0;
+  const result = spawnSync(finder, [name], { encoding: "utf8" });
+  if (result.status !== 0) return "";
+  return String(result.stdout || "").split("\n")[0].trim();
+}
+
+function commandExists(name) {
+  return Boolean(whichPath(name));
 }
 
 function isPythonJobForge(cmd, prefix) {
@@ -83,14 +93,21 @@ function repoRoot(start) {
 function resolveJobForge() {
   const envBin = (process.env.JOBFORGE_BIN || "").trim();
   if (envBin && commandExists(envBin) && isPythonJobForge(envBin, [])) {
-    return { cmd: envBin, prefix: [], config: process.env.JOBFORGE_CONFIG || "" };
-  }
-
-  if (commandExists("jobforge") && isPythonJobForge("jobforge", [])) {
     return {
-      cmd: "jobforge",
+      cmd: envBin,
       prefix: [],
       config: process.env.JOBFORGE_CONFIG || "",
+      source: "env-bin",
+    };
+  }
+
+  const pathJobforge = whichPath("jobforge");
+  if (pathJobforge && isPythonJobForge(pathJobforge, [])) {
+    return {
+      cmd: pathJobforge,
+      prefix: [],
+      config: process.env.JOBFORGE_CONFIG || "",
+      source: "path",
     };
   }
 
@@ -100,6 +117,7 @@ function resolveJobForge() {
       cmd: localShim,
       prefix: [],
       config: process.env.JOBFORGE_CONFIG || "",
+      source: "local-shim",
     };
   }
 
@@ -109,6 +127,7 @@ function resolveJobForge() {
       cmd: envPython,
       prefix: ["-m", "jobforge"],
       config: process.env.JOBFORGE_CONFIG || "",
+      source: "env-python",
     };
   }
 
@@ -118,6 +137,7 @@ function resolveJobForge() {
         cmd: python,
         prefix: ["-m", "jobforge"],
         config: process.env.JOBFORGE_CONFIG || "",
+        source: "system-python",
       };
     }
   }
@@ -130,6 +150,7 @@ function resolveJobForge() {
       cmd: python,
       prefix: ["-m", "jobforge"],
       config: process.env.JOBFORGE_CONFIG || (existsSync(config) ? config : ""),
+      source: "repo",
     };
   }
 
@@ -174,9 +195,122 @@ function runJson(target, args, options = {}) {
   }
 }
 
-async function ensureRuntime() {
-  const existing = resolveJobForge();
-  if (existing) return existing;
+function installSpec() {
+  return (
+    process.env.JOBFORGE_INSTALL_SPEC ||
+    `git+https://github.com/Taf0711/jobforge@v${VERSION}`
+  );
+}
+
+function versionParts(value) {
+  const base = String(value || "").trim().split(/[-+]/)[0];
+  return base.split(".").map((part) => Number.parseInt(part, 10));
+}
+
+function isOlderVersion(installed, expected) {
+  const left = versionParts(installed);
+  const right = versionParts(expected);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const a = Number.isFinite(left[index]) ? left[index] : 0;
+    const b = Number.isFinite(right[index]) ? right[index] : 0;
+    if (a < b) return true;
+    if (a > b) return false;
+  }
+  return false;
+}
+
+function runtimeVersion(target) {
+  const direct = runCommand(target, ["--version"], { timeout: 15_000 });
+  const output = `${direct.stdout || ""}${direct.stderr || ""}`.trim();
+  const match = output.match(/\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b/);
+  if (direct.status === 0 && match) return match[1];
+  try {
+    const fallback = runCommand(target, ["doctor"], { timeout: 60_000 });
+    const report = JSON.parse(String(fallback.stdout || "").trim());
+    if (report.jobforge) return String(report.jobforge);
+  } catch {
+    // Older runtimes may not expose a cheap version command.
+  }
+  return "";
+}
+
+function uvToolInstalled() {
+  if (!commandExists("uv")) return false;
+  const result = runRaw("uv", ["tool", "list"], { timeout: 30_000 });
+  if (result.status !== 0) return false;
+  return String(result.stdout || "")
+    .split("\n")
+    .some((line) => /^jobforge\s+v?\d/.test(line.trim()));
+}
+
+function uvToolJobforgePath() {
+  if (!commandExists("uv")) return "";
+  const result = runRaw("uv", ["tool", "dir", "--bin"], { timeout: 15_000 });
+  if (result.status !== 0) return "";
+  const base = String(result.stdout || "").trim().split("\n").pop() || "";
+  if (!base) return "";
+  const candidate = path.join(base, process.platform === "win32" ? "jobforge.exe" : "jobforge");
+  return existsSync(candidate) ? candidate : "";
+}
+
+async function updateRuntimeIfNeeded(target, { force = false } = {}) {
+  const source = target.source || "";
+  if (["env-bin", "env-python", "repo"].includes(source)) {
+    if (force) {
+      log.info("This JobForge runtime is a local or custom build; update it with its own installer.");
+    }
+    return target;
+  }
+  if (process.env.JOBFORGE_INSTALL_SPEC && !force) return target;
+  if (!uvToolInstalled()) {
+    if (force) {
+      log.warn("The installed JobForge runtime is not managed by uv; update it with its installer.");
+    }
+    return target;
+  }
+
+  const installed = runtimeVersion(target);
+  if (!force && installed && !isOlderVersion(installed, VERSION)) return target;
+
+  const message = installed
+    ? `Update the JobForge runtime ${installed} → ${VERSION}?`
+    : `Update the JobForge runtime to ${VERSION}?`;
+  const proceed = force || guard(await confirm({ message, initialValue: true }));
+  if (!proceed) return target;
+
+  const progress = spinner();
+  progress.start(`Updating JobForge runtime to ${VERSION}...`);
+  const result = runRaw(
+    "uv",
+    ["tool", "install", "--force", "--from", installSpec(), "jobforge"],
+    { timeout: 10 * 60_000 },
+  );
+  if (result.status !== 0) {
+    progress.stop("Update failed");
+    log.error("The JobForge runtime update failed.");
+    log.message((result.stderr || result.stdout || "").trim().slice(0, 1200));
+    return target;
+  }
+  progress.stop("Runtime updated");
+
+  const updated = uvToolJobforgePath();
+  if (updated && isPythonJobForge(updated, [])) {
+    return {
+      cmd: updated,
+      prefix: [],
+      config: process.env.JOBFORGE_CONFIG || "",
+      source: "uv-tool",
+    };
+  }
+  return resolveJobForge() || target;
+}
+
+async function ensureRuntime({ forceUpdate = false, skipUpdate = false } = {}) {
+  let existing = resolveJobForge();
+  if (existing) {
+    if (!skipUpdate) existing = await updateRuntimeIfNeeded(existing, { force: forceUpdate });
+    return existing;
+  }
 
   log.warn("JobForge runtime not found.");
   if (!commandExists("uv")) {
@@ -197,9 +331,7 @@ async function ensureRuntime() {
   );
   if (!proceed) return null;
 
-  const spec =
-    process.env.JOBFORGE_INSTALL_SPEC ||
-    "git+https://github.com/Taf0711/jobforge@main";
+  const spec = installSpec();
   const result = runRaw(
     "uv",
     ["tool", "install", "--from", spec, "jobforge"],
@@ -209,6 +341,15 @@ async function ensureRuntime() {
     log.error("The JobForge runtime install failed.");
     log.message((result.stderr || result.stdout || "").trim().slice(0, 1200));
     return null;
+  }
+  const installed = uvToolJobforgePath();
+  if (installed && isPythonJobForge(installed, [])) {
+    return {
+      cmd: installed,
+      prefix: [],
+      config: process.env.JOBFORGE_CONFIG || "",
+      source: "uv-tool",
+    };
   }
   return resolveJobForge();
 }
@@ -327,12 +468,21 @@ async function main() {
     return;
   }
   if (process.argv.includes("--check-runtime")) {
-    console.log(JSON.stringify(resolveJobForge(), null, 2));
+    const resolved = resolveJobForge();
+    console.log(
+      JSON.stringify(
+        resolved ? { ...resolved, version: runtimeVersion(resolved) } : null,
+        null,
+        2,
+      ),
+    );
     return;
   }
 
   intro(`JobForge ${VERSION}`);
-  const target = await ensureRuntime();
+  const forceUpdate = process.argv.includes("--update");
+  const skipUpdate = process.argv.includes("--no-update") && !forceUpdate;
+  const target = await ensureRuntime({ forceUpdate, skipUpdate });
   if (!target) {
     log.error("JobForge is not installed or its Python runtime is not available.");
     note(

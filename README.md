@@ -25,7 +25,9 @@ The optional dashboard is a local review console, not a separate job-search app.
 Requires Python 3.11+, Typst 0.14+, and `uv` if JobForge is not installed yet.
 
 ```bash
-npx jobforge
+npx jobforge            # install or update the runtime, then install into agents
+npx jobforge --update   # force a runtime update to this installer version
+npx jobforge --no-update
 ```
 
 From a checkout:

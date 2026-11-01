@@ -5,7 +5,9 @@ JobForge installs into your coding agent instead of running as a separate chat a
 ## One command
 
 ```bash
-npx jobforge
+npx jobforge            # install or update the runtime, then install into agents
+npx jobforge --update   # force a runtime update
+npx jobforge --no-update
 ```
 
 From a checkout: `npx --yes --package ./installer jobforge`.

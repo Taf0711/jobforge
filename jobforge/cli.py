@@ -32,6 +32,18 @@ def _print(value) -> None:
 
 
 def _package_version() -> str:
+    from .paths import source_root
+
+    root = source_root()
+    if root is not None:
+        try:
+            import tomllib
+
+            with (root / "pyproject.toml").open("rb") as handle:
+                return str(tomllib.load(handle)["project"]["version"])
+        except Exception:  # noqa: BLE001 - fall back to installed metadata
+            pass
+
     from importlib.metadata import PackageNotFoundError, version
 
     try:
@@ -1370,6 +1382,7 @@ def cmd_audit(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jobforge", description="Local-first job search workbench")
     parser.add_argument("--config", help="path to config.yml")
+    parser.add_argument("--version", action="version", version=_package_version())
     sub = parser.add_subparsers(dest="command")
     parser.set_defaults(func=cmd_app, host=None, port=None, no_browser=False)
 

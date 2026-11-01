@@ -56,8 +56,8 @@ jobforge serve              # server only, no browser
 
 ```bash
 uv build
-# dist/jobforge-0.4.2-py3-none-any.whl
-# dist/jobforge-0.4.2.tar.gz
+# dist/jobforge-0.5.3-py3-none-any.whl
+# dist/jobforge-0.5.3.tar.gz
 ```
 
 The wheel packages:
@@ -133,7 +133,7 @@ npm publish --access public
 # enter the 6-digit npm 2FA code when prompted
 ```
 
-After `jobforge@0.5.2` exists, configure trusted publishing once on npm:
+After the first version exists, configure trusted publishing once on npm:
 
 ```bash
 npm trust github jobforge \
@@ -153,8 +153,28 @@ OIDC. It uses `id-token: write`, requires npm 11.15+, and needs **no
 `NPM_TOKEN`**. The trusted publisher config must complete a successful publish
 within two days or it expires.
 
-`installer/package.json` version must equal the tag without the leading `v`, and
-its `repository.url` must remain `git+https://github.com/Taf0711/jobforge.git`.
+The npm installer and the Python package must carry the same version. The
+installer pins its default runtime spec to `git+...@v${VERSION}`, so
+`jobforge@0.5.3` installs the `v0.5.3` Python tag rather than floating on
+`main`.
+
+`installer/package.json` and `pyproject.toml` versions must both equal the tag
+without the leading `v`, and `installer/package.json` `repository.url` must
+remain `git+https://github.com/Taf0711/jobforge.git`.
+
+### Runtime updates
+
+`npx jobforge` checks the installed uv-managed runtime version before applying
+the install plan. If it is older than the npm installer, the wizard offers to
+run:
+
+```bash
+uv tool install --force --from git+https://github.com/Taf0711/jobforge@vX.Y.Z jobforge
+```
+
+`--update` forces the update and `--no-update` skips it. Local checkouts,
+`JOBFORGE_BIN`, and `JOBFORGE_PYTHON` are never replaced automatically. Set
+`JOBFORGE_INSTALL_SPEC` to override the install source.
 
 Manual local publish after bootstrap:
 
