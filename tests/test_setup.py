@@ -6,10 +6,10 @@ from urllib.parse import unquote
 import yaml
 from fastapi.testclient import TestClient
 
-from jobforge import db
+from jobforge import db, services
 from jobforge.config import BrowserConfig, Config, EmailConfig, LLMConfig, ServerConfig
 from jobforge.models import Preferences, Profile
-from jobforge.web.app import create_app
+from jobforge.web.app import _preferences_from_form, create_app
 from types import SimpleNamespace
 
 from jobforge.web.setup_presets import build_sources, custom_boards, selected_presets, source_board_count
@@ -95,6 +95,7 @@ def test_setup_preferences_and_sources_are_saved_and_cfg_updates(tmp_path: Path)
             "work_modes": "remote, hybrid",
             "employment_types": "full-time",
             "experience_levels": "entry, junior",
+            "years_of_experience": "3",
             "salary_min": "90000",
             "min_match": "45",
         },
@@ -108,6 +109,8 @@ def test_setup_preferences_and_sources_are_saved_and_cfg_updates(tmp_path: Path)
     saved = db.get_preferences(conn, profile.id or 0)
     assert saved.titles == ["Software Engineer", "Backend Engineer"]
     assert saved.locations == ["New York, NY", "Remote"]
+    assert saved.years_of_experience == 3
+    assert saved.years_experience_confirmed is True
     conn.close()
 
     sources = client.post(
@@ -133,6 +136,50 @@ def test_setup_preferences_and_sources_are_saved_and_cfg_updates(tmp_path: Path)
     assert source_board_count(cfg.sources) >= 10
     assert "ai" in selected_presets(cfg)
     assert "public" in selected_presets(cfg)
+
+
+def test_preferences_form_blank_years_means_unknown():
+    prefs = _preferences_from_form(
+        titles="Software Engineer",
+        locations="Remote",
+        work_modes="remote",
+        employment_types="full-time",
+        experience_levels="entry, junior",
+        years_of_experience="",
+        salary_min=0,
+        min_match=55,
+        needs_sponsorship="",
+        open_to_relocation="",
+    )
+    assert prefs.years_experience_confirmed is False
+
+    explicit = _preferences_from_form(
+        titles="Software Engineer",
+        locations="Remote",
+        work_modes="remote",
+        employment_types="full-time",
+        experience_levels="entry, junior",
+        years_of_experience="0",
+        salary_min=0,
+        min_match=55,
+        needs_sponsorship="",
+        open_to_relocation="",
+    )
+    assert explicit.years_of_experience == 0
+    assert explicit.years_experience_confirmed is True
+
+
+def test_seed_preferences_marks_config_years_confirmed(tmp_path: Path):
+    cfg = _config(tmp_path)
+    cfg.preferences = {"yearsOfExperience": 2.5}
+    prefs = services._seed_preferences(cfg)
+    assert prefs.years_of_experience == 2.5
+    assert prefs.years_experience_confirmed is True
+
+    cfg.preferences = {"yearsOfExperience": 0}
+    zero = services._seed_preferences(cfg)
+    assert zero.years_of_experience == 0
+    assert zero.years_experience_confirmed is True
 
 
 def test_setup_github_lists_preset_writes_repos(tmp_path: Path):

@@ -91,6 +91,7 @@ class JD:
     requirements: list[dict[str, Any]] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
     years_required: float | None = None
+    years_mentioned: bool = False
     degree: str | None = None
     clearance: str | None = None
     sponsorship: bool | None = None
@@ -182,6 +183,23 @@ def _all_lines(block: str) -> list[str]:
     return out
 
 
+def mentions_years(text: str) -> bool:
+    """Return True when the posting mentions a numeric year requirement.
+
+    This is deliberately broader than ``years_required``: a line outside a
+    recognized requirements section still means the human should verify the
+    floor rather than treating the posting as having no year requirement.
+    Company-age and boilerplate lines are ignored.
+    """
+    for raw in (text or "").splitlines():
+        line = BULLET.sub("", raw.strip()).strip()
+        if not line or COMPANY_AGE.search(line) or BOILERPLATE.match(line):
+            continue
+        if YEARS.search(line):
+            return True
+    return False
+
+
 def _is_requirement_line(line: str, *, body: bool = False) -> bool:
     text = BULLET.sub("", (line or "").strip()).strip()
     if not text or text.endswith(":"):
@@ -234,6 +252,7 @@ def parse_jd(
     location_hint: str = "",
 ) -> JD:
     text = normalize_text(text or "")
+    years_mentioned = mentions_years(text)
     sections = split_jd_sections(text)
 
     requirement_lines: list[tuple[str, str]] = []
@@ -320,6 +339,7 @@ def parse_jd(
         requirements=requirements,
         skills=all_skills,
         years_required=years_required,
+        years_mentioned=years_mentioned,
         degree=degree,
         clearance=clearance,
         sponsorship=sponsorship,

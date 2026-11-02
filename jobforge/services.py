@@ -12,6 +12,7 @@ from typing import Any
 
 from . import db, quality
 from .config import Config
+from .matching.experience import coerce_years
 from .matching.resume import load_profile_file, merge_profiles, profile_from_resume
 from .matching.score import score_all, score_job
 from .models import (
@@ -74,6 +75,13 @@ def _seed_preferences(config: Config) -> Preferences:
     for key, value in raw.items():
         if key in mapping:
             data[mapping[key]] = value
+    if "years_of_experience" in data:
+        years = coerce_years(data["years_of_experience"])
+        if years is None:
+            data.pop("years_of_experience", None)
+        else:
+            data["years_of_experience"] = years
+            data["years_experience_confirmed"] = True
     return Preferences.from_dict(data)
 
 

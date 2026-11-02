@@ -39,6 +39,9 @@
       {% if match.meta and match.meta.comp %}
       <p class="muted">Comp policy: <strong>{{ match.meta.comp.verdict.replace('_', ' ') }}</strong>{% if match.meta.comp.salary_high %} · {{ match.meta.comp.salary_low|money }}–{{ match.meta.comp.salary_high|money }}{% endif %}</p>
       {% endif %}
+      {% if match.meta and match.meta.years %}
+      <p class="muted">Experience: <strong>{{ '%.1f'|format(match.meta.years.have) if match.meta.years.have is not none else 'unknown' }}</strong>{% if match.meta.years.required is not none %} · floor {{ '%.0f'|format(match.meta.years.required) }}+{% endif %}{% if match.meta.years.source == 'experience' %} · estimated from dated roles{% endif %}</p>
+      {% endif %}
       <h3>Reasons</h3>
       <ul class="reasons">{% for r in match.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
       <h3>Gaps</h3>

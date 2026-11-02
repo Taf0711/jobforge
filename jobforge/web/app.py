@@ -33,6 +33,7 @@ from ..automation.base import is_manual_only_url
 from ..config import Config, FeatureFlags, load_config
 from ..integrations import github as github_integration
 from ..locking import ActionBusy, action_lock
+from ..matching.experience import coerce_years
 from ..matching.resume import load_profile_file
 from ..models import ApplicationStatus, Preferences, Profile
 from ..paths import default_config_path
@@ -94,20 +95,24 @@ def _preferences_from_form(
     work_modes: str,
     employment_types: str,
     experience_levels: str,
-    salary_min: int,
-    min_match: int,
+    years_of_experience: str = "",
+    salary_min: int = 0,
+    min_match: int = 55,
     needs_sponsorship: str,
     open_to_relocation: str,
     excluded_companies: str = "",
     excluded_keywords: str = "",
     included_keywords: str = "",
 ) -> Preferences:
+    years = coerce_years(years_of_experience)
     return Preferences(
         titles=_split_csv(titles)[:5],
         locations=_split_locations(locations),
         work_modes=_split_csv(work_modes),
         employment_types=_split_csv(employment_types),
         experience_levels=_split_csv(experience_levels),
+        years_of_experience=years or 0,
+        years_experience_confirmed=years is not None,
         salary_min=max(0, int(salary_min or 0)),
         min_match=max(0, min(100, int(min_match or 0))),
         needs_sponsorship=bool(needs_sponsorship),
@@ -601,6 +606,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         work_modes: str = Form(""),
         employment_types: str = Form(""),
         experience_levels: str = Form(""),
+        years_of_experience: str = Form(""),
         salary_min: int = Form(0),
         min_match: int = Form(45),
         needs_sponsorship: str = Form(""),
@@ -630,6 +636,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             work_modes=work_modes,
             employment_types=employment_types,
             experience_levels=experience_levels,
+            years_of_experience=years_of_experience,
             salary_min=salary_min,
             min_match=min_match,
             needs_sponsorship=needs_sponsorship,
@@ -1502,6 +1509,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         work_modes: str = Form(""),
         employment_types: str = Form(""),
         experience_levels: str = Form(""),
+        years_of_experience: str = Form(""),
         salary_min: int = Form(0),
         min_match: int = Form(55),
         needs_sponsorship: str = Form(""),
@@ -1518,6 +1526,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             work_modes=work_modes,
             employment_types=employment_types,
             experience_levels=experience_levels,
+            years_of_experience=years_of_experience,
             salary_min=salary_min,
             min_match=min_match,
             needs_sponsorship=needs_sponsorship,

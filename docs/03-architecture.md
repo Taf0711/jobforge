@@ -53,7 +53,12 @@ job requirements → hard gates (auth, years, degree, clearance, location risk)
 fit = coverage × gate survival × thin/lead-only penalty × 100
 ```
 
-Location is a risk/gap and a pursuit modifier, not a fit knockout. Every match stores reasons, gaps, and a per-requirement table. Scan ranking and deep fit are separate; scanning does not deep-score every row.
+Years are resolved from an explicit profile/preference value or a conservative
+estimate from dated non-internship experience. Unset is unknown: it does not
+multiply the score, and the match reports the unknown instead of treating it as
+zero. Quick scan caps over-level, unknown, and unparsed year rows so they cannot
+present as "strong" before deep scoring. Location is a risk/gap and a pursuit
+modifier, not a fit knockout. Every match stores reasons, gaps, and a per-requirement table. Scan ranking and deep fit are separate; scanning does not deep-score every row.
 
 ### Tailor
 

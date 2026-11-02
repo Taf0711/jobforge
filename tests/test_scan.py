@@ -216,3 +216,48 @@ def test_scan_results_persist_and_sort(tmp_path):
     assert rows[0]["scan"]["score"] >= rows[1]["scan"]["score"]
     assert rows[0]["scan"]["score"] > 0
     assert all(row["scan"] is not None for row in rows)
+
+
+def test_quick_scan_caps_over_level_years():
+    profile = _profile()
+    profile.work_auth["years_experience"] = 3
+    job = _job(description="Requirements:\n- 5+ years of Python experience.\n- Python, React, SQL.")
+    scan = quick_scan(job, profile=profile, prefs=_prefs(), archetypes={}, scan_cfg={})
+
+    assert scan.scan_score <= 50
+    assert scan.meta["years"]["status"] == "short"
+    assert any("below the floor" in gap for gap in scan.gaps)
+
+
+def test_quick_scan_caps_far_over_level_years():
+    profile = _profile()
+    profile.work_auth["years_experience"] = 3
+    job = _job(description="Requirements:\n- 8+ years of Python experience.\n- Python")
+    scan = quick_scan(job, profile=profile, prefs=_prefs(), archetypes={}, scan_cfg={})
+
+    assert scan.scan_score <= 35
+    assert scan.meta["years"]["status"] == "far_short"
+
+
+def test_quick_scan_flags_unknown_candidate_years():
+    job = _job(description="Requirements:\n- 2+ years of Python experience.\n- Python")
+    scan = quick_scan(job, profile=_profile(), prefs=_prefs(), archetypes={}, scan_cfg={})
+
+    assert scan.scan_score <= 70
+    assert scan.meta["years"]["status"] == "unknown"
+    assert any("years are unknown" in gap for gap in scan.gaps)
+
+
+def test_quick_scan_flags_unparsed_year_mention():
+    job = _job(
+        description=(
+            "About us\n"
+            "We are a backend team.\n"
+            "Our engineers have 5+ years of experience in Python."
+        )
+    )
+    scan = quick_scan(job, profile=_profile(), prefs=_prefs(), archetypes={}, scan_cfg={})
+
+    assert scan.scan_score <= 70
+    assert scan.meta["years"]["status"] == "unparsed"
+    assert any("mentioned but not parsed" in gap for gap in scan.gaps)

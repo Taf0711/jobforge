@@ -143,3 +143,62 @@ def test_philosophy_degree_is_not_mistaken_for_phd():
 
     assert result.gate_survival == 1.0
     assert not any("Degree floor" in gap for gap in result.gaps)
+
+
+def test_unknown_years_are_not_treated_as_zero():
+    profile = _profile(work_auth={})
+    job = _job("Requirements:\n- 2+ years of Python experience.\n- Python")
+    result = score_job(job, profile, _prefs(), scoring_v2=True)
+
+    assert result.gate_survival == 1.0
+    assert result.meta["years"]["status"] == "unknown"
+    assert any("years are unknown" in gap for gap in result.gaps)
+    assert not any("profile has 0" in gap for gap in result.gaps)
+
+
+def test_dated_experience_supplies_missing_years():
+    profile = _profile(
+        work_auth={},
+        experience=[{"title": "Software Engineer", "start": "2023-03", "end": "2026-06"}],
+    )
+    job = _job("Requirements:\n- 2+ years of Python experience.\n- Python")
+    result = score_job(job, profile, _prefs(), scoring_v2=True)
+
+    assert result.gate_survival == 1.0
+    assert result.meta["years"]["source"] == "experience"
+    assert any("Experience estimate" in reason for reason in result.reasons)
+
+
+def test_unparsed_year_mention_is_flagged_not_guessed():
+    job = _job(
+        "About us\n"
+        "We are a backend team.\n"
+        "Our engineers have 5+ years of experience in Python."
+    )
+    result = score_job(job, _profile(work_auth={"years_experience": 3}), _prefs(), scoring_v2=True)
+
+    assert result.meta["years"]["required"] is None
+    assert result.meta["years"]["status"] == "unparsed"
+    assert any("mentioned but not parsed" in gap for gap in result.gaps)
+
+
+def test_explicit_zero_years_still_penalizes_one_year_floor():
+    preferences = Preferences(
+        titles=["Software Engineer"],
+        locations=["Remote"],
+        experience_levels=["entry"],
+        years_of_experience=0,
+        years_experience_confirmed=True,
+    )
+    job = _job("Requirements:\n- 1+ year of Python experience.\n- Python")
+    result = score_job(job, _profile(work_auth={}), preferences, scoring_v2=True)
+
+    assert result.gate_survival == 0.65
+    assert result.meta["years"]["status"] == "close"
+
+
+def test_year_mention_ignores_company_age():
+    company_age = parse_jd("About us\nFor 30+ years, we have delivered software.")
+    candidate_years = parse_jd("About us\nOur engineers have 5+ years of experience.")
+    assert company_age.years_mentioned is False
+    assert candidate_years.years_mentioned is True

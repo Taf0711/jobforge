@@ -132,6 +132,7 @@ class Preferences:
     employment_types: list[str] = field(default_factory=list)
     experience_levels: list[str] = field(default_factory=list)
     years_of_experience: float = 0
+    years_experience_confirmed: bool = False
     salary_min: int = 0
     salary_max: int | None = None
     needs_sponsorship: bool = False

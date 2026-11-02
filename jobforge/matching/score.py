@@ -8,6 +8,7 @@ from typing import Any
 
 from ..models import Job, MatchResult, Preferences, Profile
 from .economics import comp_policy, is_nyc_role, location_economics
+from .experience import resolve_years
 from .gates import citizenship_survival, clearance_survival, gpa_survival, itar_survival
 from .jd import JD, parse_jd
 from .skills import SkillGraph, coverage
@@ -58,14 +59,6 @@ def _profile_clearance(profile: Profile, prefs: Preferences) -> str:
         if key in value:
             return key
     return "none"
-
-
-def _years(profile: Profile, prefs: Preferences) -> float:
-    raw = profile.work_auth.get("years_experience", prefs.years_of_experience)
-    try:
-        return float(raw or 0)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _role_is_remote(job: Job, jd: JD) -> bool:
@@ -248,17 +241,53 @@ def score_job(
     )
 
     gates: list[tuple[float, str, str]] = []  # (survival, reason, gap)
-    years_have = _years(profile, prefs)
+    years = resolve_years(profile, prefs)
+    years_have = years.value
+    years_meta: dict[str, Any] = {
+        "have": years_have,
+        "required": jd.years_required,
+        "source": years.source,
+        "status": "not_required",
+    }
+    years_reason = ""
+    years_gap = ""
     if jd.years_required is not None:
-        delta = jd.years_required - years_have
-        if delta >= 4:
-            gates.append((0.0, "", f"Requires {jd.years_required:g}+ years; profile has {years_have:g}"))
-        elif delta >= 2:
-            gates.append((0.20, "", f"Requires {jd.years_required:g}+ years; profile has {years_have:g}"))
-        elif delta > 0:
-            gates.append((0.65, f"Close on experience ({jd.years_required:g}+ required)", ""))
+        if years_have is None:
+            years_meta["status"] = "unknown"
+            years_gap = (
+                f"Requires {jd.years_required:g}+ years; your years are unknown "
+                "— set them in Settings or add dated experience"
+            )
         else:
-            gates.append((1.0, f"Experience clears {jd.years_required:g}+ year floor", ""))
+            delta = jd.years_required - years_have
+            have_label = f"{years_have:g}"
+            if years.source == "experience":
+                have_label += " (estimated from dated roles)"
+            if delta >= 4:
+                gates.append(
+                    (0.0, "", f"Requires {jd.years_required:g}+ years; profile has {have_label}")
+                )
+                years_meta["status"] = "far_short"
+            elif delta >= 2:
+                gates.append(
+                    (0.20, "", f"Requires {jd.years_required:g}+ years; profile has {have_label}")
+                )
+                years_meta["status"] = "short"
+            elif delta > 0:
+                gates.append((0.65, f"Close on experience ({jd.years_required:g}+ required)", ""))
+                years_meta["status"] = "close"
+            else:
+                gates.append((1.0, f"Experience clears {jd.years_required:g}+ year floor", ""))
+                years_meta["status"] = "clears"
+    elif jd.years_mentioned:
+        years_meta["status"] = "unparsed"
+        years_gap = "Years requirement mentioned but not parsed; verify the posting"
+    if (
+        years.source == "experience"
+        and years_have is not None
+        and (jd.years_required is not None or jd.years_mentioned)
+    ):
+        years_reason = f"Experience estimate: {years_have:g} years from dated roles"
 
     have_degree = _profile_degree(profile)
     if jd.degree:
@@ -358,6 +387,10 @@ def score_job(
     score = round(100.0 * coverage_result.coverage * survival * (0.5 if thin_jd else 1.0), 1)
     reasons = [reason for _, reason, _ in gates if reason]
     gaps = [gap for _, _, gap in gates if gap] + coverage_result.gaps
+    if years_reason:
+        reasons.append(years_reason)
+    if years_gap:
+        gaps.insert(0, years_gap)
     if thin_jd:
         gaps.insert(0, "Job description is thin or lead-only; open the employer posting before trusting this fit")
     if coverage_result.coverage >= 0.75:
@@ -406,6 +439,7 @@ def score_job(
             "notes": location_notes,
             "relocation_fit": relocation_fit,
         },
+        "years": years_meta,
         "thin_jd": thin_jd,
         "lead_only": lead_only,
         "word_count": len(description.split()),

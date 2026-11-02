@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 from .. import db
+from ..matching.experience import coerce_years
 from ..matching.skills import ALIASES, SKILLS, canonical, extract_skills
 from ..models import Application, Job, Preferences, Profile, slugify, utcnow
 
@@ -326,15 +327,32 @@ def _merge_resume_bullets(profile: Profile, resume_path: str | Path) -> None:
     profile.facts = experience_facts + project_facts
 
 
+def _first_years(*values: Any) -> float | None:
+    for value in values:
+        years = coerce_years(value)
+        if years is not None:
+            return years
+    return None
+
+
 def preferences_from_profile(data: dict[str, Any]) -> Preferences:
     """Map the resume-forge preference block to JobForge preferences."""
     preferences = data.get("preferences", {}) or {}
     authorization = data.get("authorization", {}) or {}
+    scoring = data.get("scoring_inputs", {}) or {}
+    years = _first_years(
+        preferences.get("years_of_experience"),
+        preferences.get("yearsOfExperience"),
+        scoring.get("years_experience") if isinstance(scoring, dict) else None,
+        scoring.get("yearsOfExperience") if isinstance(scoring, dict) else None,
+    )
     return Preferences(
         locations=[str(item) for item in preferences.get("preferred_locations", []) or []],
         open_to_relocation=bool(preferences.get("open_to_relocation", False)),
         needs_sponsorship=bool(authorization.get("sponsorship_needed", False)),
         industries=[str(item) for item in preferences.get("target_domains", []) or []],
+        years_of_experience=years or 0,
+        years_experience_confirmed=years is not None,
         comp_policy=dict(preferences.get("comp_policy", {}) or {}),
         min_match=55,
         one_application_per_company=True,

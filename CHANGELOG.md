@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.1 — years-of-experience correctness (2026-11-02)
+
+- Deep scoring no longer treats an unset years value as `0`. Years resolve from
+  an explicit profile/preference value, then a conservative estimate from dated
+  non-internship experience; otherwise the year gate is skipped and the match
+  reports that years are unknown.
+- Year mentions outside a recognized requirements section are reported as
+  "mentioned but not parsed" instead of being treated as having no year
+  requirement.
+- Quick scan parses required years when mentioned and caps over-level, unknown,
+  and unparsed rows at 35/50/70, so a 5+ year role cannot present as "strong"
+  before deep scoring.
+- Setup/settings expose a years field and preserve an explicit `0`; blank means
+  derive-or-unknown. Resume-forge import maps the preference when present.
+  Legacy stored `0` values without a confirmation flag are treated as unset.
+- Job detail shows the effective years, source, and required floor.
+- Claude Code provider tests now patch the CLI status at the route/client
+  boundary, so CI no longer depends on a locally installed `claude` binary.
+- Tests: **531 passed**; audit **0 high / 0 medium**; decisions **14/14**.
+
 ## 0.6.0 — scan-first ranking (2026-11-01)
 
 - Added a two-stage discovery pipeline: fast scan ranking in `scan_matches`,

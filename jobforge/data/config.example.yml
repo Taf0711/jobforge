@@ -54,7 +54,7 @@ preferences:
   work_modes: ["remote", "hybrid", "onsite"]
   employment_types: ["full-time"]
   experience_levels: ["entry", "junior"]
-  years_of_experience: 1
+  years_of_experience: 1   # 0 is an explicit new-grad value; omit to estimate from dated experience
   salary_min: 0
   salary_max: null
   needs_sponsorship: false

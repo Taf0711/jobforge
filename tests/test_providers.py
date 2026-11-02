@@ -561,13 +561,13 @@ def test_provider_status_and_page_for_claude_code(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("JOBFORGE_DISABLE_KEYRING", "1")
     cfg = _config(tmp_path)
     conn = db.connect(cfg.db_path)
-    monkeypatch.setattr(
-        providers,
-        "claude_code_status",
-        lambda: providers.ClaudeCodeStatus(
-            available=True, authenticated=True, auth_method="claude.ai", version="2.1.310"
-        ),
+    signed_in = lambda: providers.ClaudeCodeStatus(
+        available=True, authenticated=True, auth_method="claude.ai", version="2.1.310"
     )
+    monkeypatch.setattr(providers, "claude_code_status", signed_in)
+    # The route imports the checker directly; patch its binding too so the test
+    # does not depend on a Claude Code CLI being installed on the runner.
+    monkeypatch.setattr("jobforge.web.provider_routes.claude_code_status", signed_in)
     cards = provider_status(cfg, conn, store=ProviderCredentialStore(tmp_path, keyring_module=False))
     card = next(item for item in cards if item["spec"].id == "claude_code")
     assert card["connected"] is True
@@ -606,6 +606,11 @@ def test_llm_client_uses_claude_code_bridge(tmp_path: Path, monkeypatch):
         providers.ClaudeCodeClient,
         "chat",
         lambda self, messages, **kwargs: providers.ChatResult(content="Bridge OK"),
+    )
+    # ``available`` also checks the client's configured property, which probes
+    # the local CLI. Keep the unit test independent of the runner's PATH.
+    monkeypatch.setattr(
+        providers.ClaudeCodeClient, "configured", property(lambda self: True)
     )
     client = LLMClient(cfg)
     assert client.available is True

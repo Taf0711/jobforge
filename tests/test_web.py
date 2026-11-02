@@ -161,6 +161,7 @@ def test_job_detail_shows_pursuit_and_comp_policy(tmp_path: Path):
     assert "Pursuit" in response.text
     assert "Comp policy:" in response.text
     assert "meets target" in response.text
+    assert "Experience:" in response.text
 
 
 def test_apply_route_blocks_manual_only_before_spawning(tmp_path: Path, monkeypatch):

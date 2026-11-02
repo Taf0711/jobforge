@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -174,6 +175,14 @@ def test_preferences_and_network_mapping(tmp_path: Path):
     assert connection["relationship"] == "recruiter"
     assert connection["role"] == "Technical Recruiter"
     assert connection["last_contact"] == "2026-01-01"
+
+
+def test_preferences_from_profile_maps_years():
+    data = copy.deepcopy(PROFILE)
+    data["preferences"]["years_of_experience"] = 3.5
+    prefs = preferences_from_profile(data)
+    assert prefs.years_of_experience == 3.5
+    assert prefs.years_experience_confirmed is True
 
 
 def test_select_projects_prefers_jd_relevant_projects(tmp_path: Path):

@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from ..matching.archetypes import detect_archetype
-from ..matching.jd import JD
+from ..matching.experience import resolve_years
+from ..matching.jd import JD, mentions_years, parse_jd
 from ..matching.skills import extract_skills
 from ..models import Job, Preferences, Profile, ScanResult
 
@@ -107,6 +108,15 @@ COMPETITION_BOOST = {
     "direct_ats": 3,
     "community": 2,
     "mass_aggregator": 0,
+}
+# Years is a ranking signal in scan, not a hard knockout. Caps prevent a role
+# that is clearly over-level from presenting as "strong" before deep scoring.
+YEARS_SCAN_CAPS = {
+    "far_short": 35.0,
+    "short": 50.0,
+    "close": 70.0,
+    "unknown": 70.0,
+    "unparsed": 70.0,
 }
 MARQUEE_COMPANIES = (
     "google", "meta", "facebook", "apple", "amazon", "microsoft", "netflix",
@@ -494,6 +504,66 @@ def quick_scan(
 
     total = level + relevance + location + opportunity + domain + stack
     total = max(0.0, min(100.0, float(total)))
+
+    years = resolve_years(profile, prefs)
+    years_required: float | None = None
+    years_mentioned = mentions_years(job.description or "")
+    if years_mentioned:
+        parsed = parse_jd(
+            f"{job.title}\n{job.company}\n{job.location}\n{job.description or ''}",
+            title_hint=job.title,
+            company_hint=job.company,
+            location_hint=job.location,
+        )
+        years_required = parsed.years_required
+
+    years_status = "not_required"
+    years_cap: float | None = None
+    years_gap = ""
+    years_reason = ""
+    if years_required is not None:
+        if years.value is None:
+            years_status = "unknown"
+            years_gap = f"Requires {years_required:g}+ years; your years are unknown"
+        else:
+            delta = years_required - years.value
+            have_label = f"{years.value:g}"
+            if years.source == "experience":
+                have_label += " (estimated)"
+            if delta >= 4:
+                years_status = "far_short"
+                years_gap = (
+                    f"Requires {years_required:g}+ years; profile has {have_label} "
+                    "— far below the floor"
+                )
+            elif delta >= 2:
+                years_status = "short"
+                years_gap = (
+                    f"Requires {years_required:g}+ years; profile has {have_label} "
+                    "— below the floor"
+                )
+            elif delta > 0:
+                years_status = "close"
+                years_gap = (
+                    f"Close on experience ({years_required:g}+ required; "
+                    f"profile has {have_label})"
+                )
+            else:
+                years_status = "clears"
+    elif years_mentioned:
+        years_status = "unparsed"
+        years_gap = "Years requirement mentioned but not parsed; verify the posting"
+
+    years_cap = YEARS_SCAN_CAPS.get(years_status)
+    if years_cap is not None:
+        total = min(total, years_cap)
+    if (
+        years.source == "experience"
+        and years.value is not None
+        and (years_required is not None or years_mentioned)
+    ):
+        years_reason = f"experience: {years.value:g} years estimated from dated roles"
+
     confidence = _confidence(job, competition, age)
 
     reasons = [
@@ -504,7 +574,11 @@ def quick_scan(
         f"domain: {domain_reason} ({domain})",
         f"stack: {stack_reason} ({stack})",
     ]
+    if years_reason:
+        reasons.append(years_reason)
     gaps: list[str] = []
+    if years_gap:
+        gaps.append(years_gap)
     if location == 0:
         gaps.append(f"Location outside US/remote: {job.location or 'unknown'}")
     elif location < 10 and not prefs.open_to_relocation:
@@ -526,6 +600,13 @@ def quick_scan(
             "stack": stack,
         },
         "archetype": archetype,
+        "years": {
+            "required": years_required,
+            "have": years.value,
+            "source": years.source,
+            "status": years_status,
+            "cap": years_cap,
+        },
         "source": job.source,
         "age_days": age,
         "lead_only": "community job list" in (job.description or "").lower()

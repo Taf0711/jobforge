@@ -21,10 +21,15 @@
       </div>
       <div class="row">
         <label>Experience levels <input name="experience_levels" value="{{ prefs.experience_levels|join(', ') }}" placeholder="entry, junior, mid"></label>
-        <label>Minimum salary (USD) <input type="number" name="salary_min" value="{{ prefs.salary_min }}" min="0" step="1000"></label>
+        <label>Years of experience <span class="muted">(blank = estimate from dated roles, or unknown)</span>
+          <input type="number" name="years_of_experience" value="{{ prefs.years_of_experience if (prefs.years_experience_confirmed or prefs.years_of_experience) else '' }}" min="0" step="0.5" placeholder="e.g. 3">
+        </label>
       </div>
       <div class="row">
+        <label>Minimum salary (USD) <input type="number" name="salary_min" value="{{ prefs.salary_min }}" min="0" step="1000"></label>
         <label>Minimum match <input type="number" name="min_match" value="{{ prefs.min_match }}" min="0" max="100"></label>
+      </div>
+      <div class="row">
         <label class="check"><input type="checkbox" name="needs_sponsorship" value="1" {{ 'checked' if prefs.needs_sponsorship else '' }}> I need visa sponsorship</label>
         <label class="check"><input type="checkbox" name="open_to_relocation" value="1" {{ 'checked' if prefs.open_to_relocation else '' }}> Open to relocation</label>
       </div>
