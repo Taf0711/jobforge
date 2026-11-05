@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.6.2 — MCP write surface, project repair, and authorized submission (2026-11-04)
+
+- Added scope-gated MCP write tools: `jobforge_scan` (`scan:run`),
+  `jobforge_score` (`matches:write`), `jobforge_build_queue` (`queue:write`),
+  and `jobforge_request_submission` (`submission:request`).
+- `jobforge_request_submission` only creates a pending one-use operation. A
+  human must approve that exact request in `/operations`; the worker rechecks
+  the connection, profile, scope, quality gate, risk consent, and 10/day cap
+  before calling the existing apply path with submission enabled.
+- The approval page is action-aware: submission requests show the job, bound
+  profile, quality blockers, risk-consent state, daily cap, and the explicit
+  consequence of approval.
+- Read tools still use the read-only SQLite connection; action tools use a
+  writable connection and always resolve the bound profile rather than the
+  active profile.
+- Added `scan:run`, `matches:write`, `queue:write`, and `submission:request`
+  scopes. They are opt-in; the installer defaults remain read-oriented.
+- Updated the Agent Skill, MCP docs, and `docs/40-mcp-write-surface.md` with the
+  corrected rule: the agent never submits without explicit operation-bound
+  authorization.
+- Resume parsing now treats each project header as its own entry instead of
+  reusing the experience parser. Project titles, tech lines, dates, URLs, and
+  bullets stay together, and a following project header is no longer swallowed
+  into the previous project's last bullet.
+- Added `resume_import.project_mode` (default `merge`) and a **Settings →
+  Resume imports** selector. Merge keeps curated projects, updates matching
+  titles, and appends new projects; replace mirrors the resume. Added
+  `jobforge reparse-profile` to refresh only a profile's projects and project
+  facts from its saved resume, with `--profile`, `--resume`, `--mode`, and
+  `--dry-run`.
+- `mcp==2.3.0` is now a core dependency, so a plain `uv tool install`/`npx
+  jobforge` runtime can serve the MCP adapter without a separate extra.
+- Tests cover schemas, scope denial, bound-profile scoring, queue conflicts,
+  submission requests, approval UI, worker risk/quality/captcha handling,
+  hidden hCaptcha detection, Lever-style Yes/No checkbox groups, and project
+  section parsing.
+- The live non-submitting ATS smoke passes with hCaptcha handoff. A live submit
+  attempt against the public Lever demo correctly returned `CAPTCHA_REQUIRED`
+  and did not submit. `jobforge_request_submission` remains **experimental**
+  until a successful live submit smoke on a captcha-free, employer-sanctioned
+  test form. It is still double-gated by dashboard approval and risk consent.
+
 ## 0.6.1 — years-of-experience correctness (2026-11-02)
 
 - Deep scoring no longer treats an unset years value as `0`. Years resolve from

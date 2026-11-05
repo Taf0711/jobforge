@@ -77,3 +77,52 @@ def test_fill_form_second_pass_and_required_checkbox(tmp_path: Path):
         assert any("Why this company" in item for item in report.required_missing)
         assert any("Location" in item for item in report.required_missing)
         browser.close()
+
+
+def test_fill_form_handles_lever_style_yes_no_checkbox_group(tmp_path: Path):
+    resume = tmp_path / "resume.pdf"
+    resume.write_bytes(b"%PDF-1.4 resume")
+    profile = Profile(
+        first_name="Ada",
+        last_name="Lovelace",
+        email="ada@example.com",
+        phone="+1 555 0100",
+        work_auth={"authorized": True},
+    )
+    job = Job(source="lever", source_id="1", company="Acme", title="Engineer")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(
+            """
+            <form>
+              <li class="application-question custom-question"><div>
+                <div class="application-label full-width multiple-select">
+                  <div class="text">Are you eligible to work in the United States?</div>
+                </div>
+                <div class="application-field full-width">
+                  <ul data-qa="checkboxes">
+                    <li><label><input type="checkbox" name="work-eligibility" value="Yes"><span>Yes</span></label></li>
+                    <li><label><input type="checkbox" name="work-eligibility" value="No"><span>No</span></label></li>
+                  </ul>
+                </div>
+              </div></li>
+            </form>
+            """
+        )
+        report = fill_form(
+            page,
+            job,
+            profile,
+            Preferences(),
+            str(resume),
+            AnswerBank(),
+        )
+        assert page.locator('input[value="Yes"]').is_checked() is True
+        assert page.locator('input[value="No"]').is_checked() is False
+        assert any(
+            "eligible to work" in field.label.lower() and field.value == "Yes"
+            for field in report.fields
+        )
+        browser.close()

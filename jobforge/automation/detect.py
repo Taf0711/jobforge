@@ -4,10 +4,17 @@ from playwright.sync_api import Page
 
 from ..sources.direct import detect_ats
 
-CAPTCHA_SELECTORS = [
+CAPTCHA_ANY_SELECTORS = [
     'iframe[src*="recaptcha"]',
     'iframe[src*="hcaptcha"]',
     'iframe[src*="turnstile"]',
+    'iframe[src*="challenges.cloudflare.com"]',
+    '[data-hcaptcha-widget-id]',
+    '[data-sitekey]',
+    'textarea[name*="h-captcha-response"]',
+    'textarea[name*="g-recaptcha-response"]',
+]
+CAPTCHA_SELECTORS = [
     '[class*="captcha"]',
     '[id*="captcha"]',
 ]
@@ -25,6 +32,14 @@ CAPTCHA_TEXT = (
 
 
 def captcha_present(page: Page) -> str:
+    # Invisible widgets often keep the iframe/container hidden. Presence is
+    # still a stop condition; never try to solve or click through it.
+    for selector in CAPTCHA_ANY_SELECTORS:
+        try:
+            if page.locator(selector).count():
+                return selector
+        except Exception:
+            continue
     for selector in CAPTCHA_SELECTORS:
         try:
             locator = page.locator(selector).first

@@ -5,6 +5,10 @@ data_dir: data
 output_dir: output
 profile: null          # optional YAML/JSON profile override
 resume: null           # optional base resume path (PDF/DOCX/TXT/MD)
+resume_import:
+  # merge: keep curated projects, update matching titles, append new projects.
+  # replace: mirror the resume's project section and drop other project-bank rows.
+  project_mode: merge
 
 sources:
   greenhouse:

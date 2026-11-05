@@ -274,6 +274,61 @@ def _fill_radio_groups(
             report.unresolved.append(f"{question[:180]} (answer: {answer.value})")
 
 
+def _fill_checkbox_groups(
+    page: Page,
+    profile: Profile,
+    prefs: Preferences,
+    bank: AnswerBank,
+    report: FillReport,
+) -> None:
+    """Fill mutually exclusive Yes/No checkbox groups (Lever-style).
+
+    A plain checkbox group is usually multi-select, so only groups whose
+    answer is a high-confidence work-authorization/sponsorship/relocation
+    value are touched. Voluntary disclosures are never guessed.
+    """
+    try:
+        checkboxes = page.locator('input[type="checkbox"]').all()
+    except Exception:
+        return
+    groups: dict[str, list[Any]] = {}
+    for box in checkboxes:
+        if not _visible(box):
+            continue
+        name = box.get_attribute("name") or ""
+        if not name:
+            continue
+        groups.setdefault(name, []).append(box)
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        if any(box.is_checked() for box in group):
+            continue
+        question = _group_question(page, group[0])
+        if not question:
+            continue
+        answer = bank.answer(question, profile, prefs)
+        if answer.category not in {"work_authorization", "sponsorship", "relocation"}:
+            continue
+        if answer.value.strip().lower() not in {"yes", "no"}:
+            continue
+        matched = False
+        for option in group:
+            option_label = _label_for(page, option).strip().lower()
+            if option_label == answer.value.strip().lower():
+                try:
+                    option.check()
+                    report.fields.append(
+                        FieldReport(question[:200], answer.value, answer.category, "filled")
+                    )
+                    matched = True
+                except Exception:
+                    pass
+                break
+        if not matched:
+            report.unresolved.append(f"{question[:180]} (answer: {answer.value})")
+
+
 def _report_required_controls(page: Page, report: FillReport) -> None:
     try:
         required = page.locator(
@@ -474,6 +529,7 @@ def fill_form(
             else:
                 report.unresolved.append(f"{label[:180]} (answer: {answer.value})")
         _fill_radio_groups(page, profile, prefs, bank, report)
+        _fill_checkbox_groups(page, profile, prefs, bank, report)
         if len(filled_labels) == 0:
             break
 

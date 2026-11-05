@@ -2,7 +2,7 @@
 {% block content %}
 <section class="panel">
   <div class="panel-head"><h1>Operations</h1><span class="pill">human approval</span></div>
-  <p class="muted">Resume requests created by local agents. Nothing is generated until you approve it here. Approval runs the deterministic/LLM tailoring path; it never submits an application.</p>
+  <p class="muted">Requests created by local agents. Nothing runs until you approve it here. Resume approval renders a PDF; submission approval opens the existing browser flow and submits only after the risk consent, daily cap, and quality gate pass. Deny anything you do not want executed.</p>
   {% if operations %}
   <table class="compact">
     <thead><tr><th>Job</th><th>Action</th><th>State</th><th>Created</th><th></th></tr></thead>

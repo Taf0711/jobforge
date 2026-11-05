@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from jobforge import db
+from jobforge import db, quality, risk
 from jobforge.config import BrowserConfig, Config, EmailConfig, LLMConfig, ServerConfig
 from jobforge.models import Application, Job, MatchResult, Profile
 from jobforge.web.app import create_app
@@ -280,3 +282,209 @@ def test_worker_failure_is_recorded_without_a_path(tmp_path: Path, monkeypatch):
     assert result["error_code"] == "RENDER_FAILED"
     assert str(tmp_path) not in result["error_message"]
     assert "[local path]" in result["error_message"]
+
+
+def _submission_operation(tmp_path: Path):
+    cfg, profile_id, job_id, connection_id, _ = _seed(tmp_path)
+    conn = db.connect(cfg.db_path)
+    db.update_agent_connection_scopes(conn, connection_id, ["submission:request"])
+    operation = db.create_agent_operation(
+        conn,
+        connection_id=connection_id,
+        profile_id=profile_id,
+        action="submit_application",
+        payload={"job_id": job_id},
+        idempotency_key="submit-test-1",
+    )
+    conn.close()
+    return cfg, profile_id, job_id, connection_id, operation
+
+
+def test_submission_approval_page_shows_risk_and_action(tmp_path: Path):
+    cfg, _profile_id, _job_id, _connection_id, operation = _submission_operation(tmp_path)
+    client = TestClient(create_app(cfg))
+
+    detail = client.get(f"/operations/{operation['id']}")
+
+    assert detail.status_code == 200
+    assert "Submission request" in detail.text
+    assert "Approve and submit" in detail.text
+    assert "Risk consent is not ready" in detail.text
+    assert "Daily cap" in detail.text
+
+
+def test_worker_submits_only_after_approval_and_rechecks_profile(
+    tmp_path: Path, monkeypatch
+):
+    cfg, profile_id, _job_id, _connection_id, operation = _submission_operation(tmp_path)
+    conn = db.connect(cfg.db_path)
+    other_id = db.save_profile(conn, Profile(name="Other profile"))
+    db.set_active_profile(conn, other_id)
+    db.approve_agent_operation(conn, operation["id"])
+    conn.close()
+    seen = {}
+
+    def fake_apply(config, connection, job_id, **kwargs):
+        seen.update(kwargs)
+        seen["job_id"] = job_id
+        return {
+            "application_id": 99,
+            "submitted": True,
+            "captcha": False,
+            "ats": {"ats": "greenhouse"},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr("jobforge.workbench.worker.services.apply_job", fake_apply)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = run_operation(cfg, conn, operation["id"])
+    finally:
+        conn.close()
+
+    assert result["state"] == "succeeded"
+    assert result["result"]["submitted"] is True
+    from jobforge.workbench.actions import _operation_public
+
+    assert _operation_public(result)["submission_performed_by_jobforge"] is True
+    assert seen["allow_submit"] is True
+    assert seen["submission_mode"] == "unattended"
+    assert seen["review_only"] is False
+    assert seen["profile_id"] == profile_id
+    assert seen["profile_id"] != other_id
+
+
+def test_worker_maps_daily_cap_refusal(tmp_path: Path, monkeypatch):
+    cfg, _profile_id, _job_id, _connection_id, operation = _submission_operation(tmp_path)
+    conn = db.connect(cfg.db_path)
+    db.approve_agent_operation(conn, operation["id"])
+    conn.close()
+
+    def fail(*args, **kwargs):
+        raise risk.RiskError("Daily submit cap reached (10). Wait until tomorrow.")
+
+    monkeypatch.setattr("jobforge.workbench.worker.services.apply_job", fail)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = run_operation(cfg, conn, operation["id"])
+    finally:
+        conn.close()
+
+    assert result["state"] == "failed"
+    assert result["error_code"] == "DAILY_CAP_REACHED"
+
+
+def test_worker_blocks_submission_when_scope_is_revoked(tmp_path: Path, monkeypatch):
+    cfg, _profile_id, _job_id, connection_id, operation = _submission_operation(tmp_path)
+    conn = db.connect(cfg.db_path)
+    db.approve_agent_operation(conn, operation["id"])
+    conn.execute(
+        "UPDATE agent_connections SET scopes_json=?, generation=generation+1 WHERE id=?",
+        (json.dumps(["jobs:read"]), connection_id),
+    )
+    conn.commit()
+    conn.close()
+
+    def fail(*args, **kwargs):
+        raise AssertionError("apply_job must not run without the submission scope")
+
+    monkeypatch.setattr("jobforge.workbench.worker.services.apply_job", fail)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = run_operation(cfg, conn, operation["id"])
+    finally:
+        conn.close()
+
+    assert result["state"] == "failed"
+    assert result["error_code"] == "SCOPE_DENIED"
+
+
+def test_worker_maps_quality_block_and_does_not_report_submission(
+    tmp_path: Path, monkeypatch
+):
+    cfg, _profile_id, _job_id, _connection_id, operation = _submission_operation(tmp_path)
+    conn = db.connect(cfg.db_path)
+    db.approve_agent_operation(conn, operation["id"])
+    conn.close()
+
+    def fail(*args, **kwargs):
+        raise quality.QualityBlocked(
+            quality.QualityReport(
+                score=0,
+                ready=False,
+                checks=[
+                    quality.QualityCheck(
+                        name="match_score",
+                        passed=False,
+                        severity=quality.BLOCKER,
+                        detail="match 10 is below minimum 55",
+                    )
+                ],
+            )
+        )
+
+    monkeypatch.setattr("jobforge.workbench.worker.services.apply_job", fail)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = run_operation(cfg, conn, operation["id"])
+    finally:
+        conn.close()
+
+    assert result["state"] == "failed"
+    assert result["error_code"] == "QUALITY_BLOCKED"
+    assert result["result"].get("submitted") is not True
+
+
+def test_worker_records_captcha_as_handoff(tmp_path: Path, monkeypatch):
+    cfg, _profile_id, _job_id, _connection_id, operation = _submission_operation(tmp_path)
+    conn = db.connect(cfg.db_path)
+    db.approve_agent_operation(conn, operation["id"])
+    conn.close()
+
+    def fake_apply(*args, **kwargs):
+        return {
+            "application_id": 17,
+            "submitted": False,
+            "captcha": True,
+            "ats": {"ats": "greenhouse"},
+            "warnings": ["captcha present"],
+        }
+
+    monkeypatch.setattr("jobforge.workbench.worker.services.apply_job", fake_apply)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = run_operation(cfg, conn, operation["id"])
+    finally:
+        conn.close()
+
+    assert result["state"] == "failed"
+    assert result["error_code"] == "CAPTCHA_REQUIRED"
+    assert result["result"]["submitted"] is False
+    assert result["result"]["captcha"] is True
+
+
+def test_worker_expires_an_old_submission_approval(tmp_path: Path, monkeypatch):
+    cfg, _profile_id, _job_id, _connection_id, operation = _submission_operation(tmp_path)
+    conn = db.connect(cfg.db_path)
+    db.approve_agent_operation(conn, operation["id"])
+    old = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat(
+        timespec="seconds"
+    )
+    conn.execute(
+        "UPDATE agent_operations SET approved_at=? WHERE id=?",
+        (old, operation["id"]),
+    )
+    conn.commit()
+    conn.close()
+
+    def fail(*args, **kwargs):
+        raise AssertionError("apply_job must not run after the approval window")
+
+    monkeypatch.setattr("jobforge.workbench.worker.services.apply_job", fail)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = run_operation(cfg, conn, operation["id"])
+    finally:
+        conn.close()
+
+    assert result["state"] == "expired"

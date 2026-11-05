@@ -213,10 +213,16 @@ def _status(context: QueryContext) -> dict[str, Any]:
             "browser_ready": browser_ready,
         },
         "capabilities": {
-            "read_only": True,
-            "proposals": False,
+            "read_only": not bool(
+                context.scopes
+                & {"scan:run", "matches:write", "queue:write", "submission:request"}
+            ),
+            "scan": "scan:run" in context.scopes,
+            "score": "matches:write" in context.scopes,
+            "queue": "queue:write" in context.scopes,
+            "proposals": "proposals:create" in context.scopes,
             "browser_actions": False,
-            "submission": False,
+            "submission": "submission:request" in context.scopes,
         },
         "warnings": warnings,
         "links": [{"rel": "dashboard", "path": "/"}],
@@ -643,7 +649,7 @@ def call_tool(context: QueryContext, tool: str, payload: Any) -> dict[str, Any]:
         return error_envelope(
             ToolError(
                 "INTERNAL_ERROR",
-                "The workbench could not complete this read. The local log has the request ID.",
+                "The workbench could not complete this request. The local log has the request ID.",
             ),
             request_id_value=rid,
         )

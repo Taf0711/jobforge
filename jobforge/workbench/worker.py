@@ -1,4 +1,4 @@
-"""One-operation worker for human-approved resume rendering."""
+"""One-operation worker for human-approved resume and submission actions."""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ import os
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .. import db, services
+from .. import db, quality, risk, services
 from ..config import Config
 from ..locking import action_lock
 from ..models import utcnow
@@ -66,13 +67,33 @@ def run_operation(config: Config, conn, operation_id: str) -> dict[str, Any]:
         db.update_agent_operation(conn, operation_id, state="expired", finished_at=utcnow())
         db.append_agent_operation_event(conn, operation_id, "expired", {})
         return db.get_agent_operation(conn, operation_id) or operation
+    if operation["state"] == "approved" and operation.get("approved_at"):
+        try:
+            approved_at = datetime.fromisoformat(
+                str(operation["approved_at"]).replace("Z", "+00:00")
+            )
+        except ValueError:
+            approved_at = None
+        if approved_at is not None and approved_at.tzinfo is None:
+            approved_at = approved_at.replace(tzinfo=timezone.utc)
+        if approved_at is not None and (
+            datetime.now(timezone.utc) - approved_at > timedelta(minutes=10)
+        ):
+            db.update_agent_operation(
+                conn, operation_id, state="expired", finished_at=utcnow()
+            )
+            db.append_agent_operation_event(
+                conn, operation_id, "expired", {"reason": "approval_window"}
+            )
+            return db.get_agent_operation(conn, operation_id) or operation
 
     with action_lock(config):
         operation = db.claim_agent_operation(conn, operation_id, uuid.uuid4().hex)
         if operation is None or operation["state"] != "running":
             return operation or {}
         try:
-            if operation["action"] != "render_resume":
+            action = str(operation["action"])
+            if action not in {"render_resume", "submit_application"}:
                 _finish(
                     conn,
                     operation_id,
@@ -85,7 +106,7 @@ def run_operation(config: Config, conn, operation_id: str) -> dict[str, Any]:
 
             # Approval is not a permanent grant. Re-check the connection and
             # its scopes at execution time; revocation or disabling the local
-            # integration must stop a pending render.
+            # integration must stop a pending action.
             try:
                 context = load_query_context(
                     config, conn, connection_id=str(operation["connection_id"])
@@ -108,7 +129,11 @@ def run_operation(config: Config, conn, operation_id: str) -> dict[str, Any]:
                     error_message="The connection is no longer bound to the approved profile.",
                 )
                 return db.get_agent_operation(conn, operation_id) or operation
-            required = {"proposals:create", "profile:resume_context"}
+            required = (
+                {"proposals:create", "profile:resume_context"}
+                if action == "render_resume"
+                else {"submission:request"}
+            )
             if not required.issubset(context.scopes):
                 _finish(
                     conn,
@@ -119,25 +144,103 @@ def run_operation(config: Config, conn, operation_id: str) -> dict[str, Any]:
                 )
                 return db.get_agent_operation(conn, operation_id) or operation
 
-            stats = services.tailor_job(
-                config, conn, job_id, profile_id=context.profile_id
-            )
+            if action == "render_resume":
+                stats = services.tailor_job(
+                    config, conn, job_id, profile_id=context.profile_id
+                )
+                result = {
+                    "application_id": int(stats.get("application_id") or 0),
+                    "ats": stats.get("ats") or {},
+                    "facts": int(stats.get("facts") or 0),
+                    "warnings": list(stats.get("warnings") or [])[:20],
+                    "llm_used": bool(stats.get("llm_used")),
+                    "llm_model": str(stats.get("llm_model") or ""),
+                    "mode": str(stats.get("mode") or ""),
+                }
+                _finish(conn, operation_id, "succeeded", result=result)
+                return db.get_agent_operation(conn, operation_id) or operation
+
+            try:
+                stats = services.apply_job(
+                    config,
+                    conn,
+                    job_id,
+                    allow_submit=True,  # security-audit: allow auto-submit enabled
+                    submission_mode="unattended",
+                    review_only=False,
+                    non_interactive=True,
+                    profile_id=context.profile_id,
+                )
+            except quality.QualityBlocked as exc:
+                _finish(
+                    conn,
+                    operation_id,
+                    "failed",
+                    error_code="QUALITY_BLOCKED",
+                    error_message=_safe_error(exc, config),
+                )
+                return db.get_agent_operation(conn, operation_id) or operation
+            except risk.RiskError as exc:
+                text = _safe_error(exc, config)
+                _finish(
+                    conn,
+                    operation_id,
+                    "failed",
+                    error_code=(
+                        "DAILY_CAP_REACHED"
+                        if "cap reached" in text.lower()
+                        else "RISK_NOT_AUTHORIZED"
+                    ),
+                    error_message=text,
+                )
+                return db.get_agent_operation(conn, operation_id) or operation
+            except ValueError as exc:
+                _finish(
+                    conn,
+                    operation_id,
+                    "failed",
+                    error_code="SUBMISSION_REFUSED",
+                    error_message=_safe_error(exc, config),
+                )
+                return db.get_agent_operation(conn, operation_id) or operation
+
             result = {
                 "application_id": int(stats.get("application_id") or 0),
                 "ats": stats.get("ats") or {},
-                "facts": int(stats.get("facts") or 0),
+                "submitted": bool(stats.get("submitted")),
+                "captcha": bool(stats.get("captcha")),
                 "warnings": list(stats.get("warnings") or [])[:20],
-                "llm_used": bool(stats.get("llm_used")),
-                "llm_model": str(stats.get("llm_model") or ""),
-                "mode": str(stats.get("mode") or ""),
             }
-            _finish(conn, operation_id, "succeeded", result=result)
+            if result["submitted"]:
+                _finish(conn, operation_id, "succeeded", result=result)
+            elif result["captcha"]:
+                _finish(
+                    conn,
+                    operation_id,
+                    "failed",
+                    error_code="CAPTCHA_REQUIRED",
+                    error_message="The application reached a captcha; solve it manually.",
+                    result=result,
+                )
+            else:
+                _finish(
+                    conn,
+                    operation_id,
+                    "failed",
+                    error_code="SUBMISSION_NOT_CONFIRMED",
+                    error_message="The form did not report a successful submission.",
+                    result=result,
+                )
         except Exception as exc:  # noqa: BLE001 - worker boundary
             _finish(
                 conn,
                 operation_id,
                 "failed",
-                error_code="RENDER_FAILED",
+                error_code=(
+                    "RENDER_FAILED"
+                    if operation.get("action") == "render_resume"
+                    else "SUBMISSION_FAILED"
+                ),
                 error_message=_safe_error(exc, config),
             )
         return db.get_agent_operation(conn, operation_id) or operation

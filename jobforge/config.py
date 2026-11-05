@@ -104,6 +104,14 @@ class BrowserConfig:
 
 
 @dataclass
+class ResumeImportConfig:
+    project_mode: str = "merge"  # merge | replace
+
+    def to_dict(self) -> dict[str, str]:
+        return {"project_mode": self.project_mode}
+
+
+@dataclass
 class FeatureFlags:
     setup_wizard: bool = True
     github_connections: bool = True
@@ -170,6 +178,7 @@ class Config:
     features: FeatureFlags = field(default_factory=FeatureFlags)
     agent: AgentConfig = field(default_factory=AgentConfig)
     tailoring: TailoringConfig = field(default_factory=TailoringConfig)
+    resume_import: ResumeImportConfig = field(default_factory=ResumeImportConfig)
 
     def ensure_dirs(self) -> None:
         for p in (
@@ -187,6 +196,16 @@ def _defaults() -> dict[str, Any]:
     if example.exists():
         return yaml.safe_load(example.read_text(encoding="utf-8")) or {}
     return {}
+
+
+def _resume_project_mode(data: dict[str, Any]) -> str:
+    raw = (
+        _env("JOBFORGE_RESUME_PROJECT_MODE")
+        or _get(data, "resume_import.project_mode", "merge")
+        or "merge"
+    )
+    mode = str(raw).strip().lower()
+    return mode if mode in {"merge", "replace"} else "merge"
 
 
 def _tailoring_mode(data: dict[str, Any]) -> str:
@@ -278,6 +297,9 @@ def load_config(path: str | Path | None = None) -> Config:
         ),
         tailoring=TailoringConfig(
             mode=_tailoring_mode(data),
+        ),
+        resume_import=ResumeImportConfig(
+            project_mode=_resume_project_mode(data),
         ),
         agent=AgentConfig(
             max_steps=max(

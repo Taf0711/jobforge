@@ -2,7 +2,7 @@
 {% block content %}
 <section class="panel">
   <div class="panel-head">
-    <h1>Resume request</h1>
+    <h1>{{ 'Submission request' if operation.action == 'submit_application' else 'Resume request' }}</h1>
     <span class="pill {{ 'good' if operation.state == 'succeeded' else ('bad' if operation.state in ['failed','denied','expired'] else '') }}">{{ operation.state }}</span>
   </div>
   {% if job %}
@@ -12,6 +12,7 @@
   {% endif %}
   <table class="compact"><tbody>
     <tr><td>Operation</td><td><code>{{ operation.id }}</code></td></tr>
+    <tr><td>Action</td><td>{{ operation.action }}</td></tr>
     <tr><td>Created</td><td>{{ operation.created_at }}</td></tr>
     <tr><td>Approval expires</td><td>{{ operation.expires_at }}</td></tr>
     {% if operation.approved_at %}<tr><td>Approved</td><td>{{ operation.approved_at }}</td></tr>{% endif %}
@@ -19,7 +20,30 @@
     {% if operation.finished_at %}<tr><td>Finished</td><td>{{ operation.finished_at }}</td></tr>{% endif %}
   </tbody></table>
 
-  {% if operation.state == 'pending_approval' %}
+  {% if operation.state == 'pending_approval' and operation.action == 'submit_application' %}
+  <p class="setup-note">Approving this request will open a browser and submit this application. It does not solve captchas, bypass 2FA, create employer accounts, or use LinkedIn/Indeed automation. The <code>unattended_submit</code> risk consent must already be enabled, the shared daily cap applies, and the worker rechecks authorization and the quality gate before opening the browser. Approval must execute within 10 minutes. If any gate fails, it stops without submitting.</p>
+  <table class="compact"><tbody>
+    <tr><td>Risk consent</td><td>{{ 'enabled' if risk_allowed else 'not ready' }}{% if risk_reason %} · {{ risk_reason }}{% endif %}</td></tr>
+    <tr><td>Daily cap</td><td>{{ risk_cap }} shared unattended + autopilot submissions</td></tr>
+    <tr><td>Quality gate</td><td>{{ 'ready' if not quality_blockers else quality_blockers|length ~ ' blocker(s)' }}</td></tr>
+  </tbody></table>
+  {% if quality_blockers %}
+  <div class="flash bad">
+    <strong>Quality blockers</strong>
+    <ul class="gaps">{% for item in quality_blockers %}<li>{{ item.name }}: {{ item.detail }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  {% if quality_warnings %}
+  <p class="muted">Warnings: {% for item in quality_warnings %}{{ item.name }}: {{ item.detail }}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+  {% endif %}
+  {% if not risk_allowed %}
+  <div class="flash bad">Risk consent is not ready. {{ risk_reason }}</div>
+  {% endif %}
+  <div class="actions">
+    <form method="post" action="/operations/{{ operation.id }}/approve"><button class="primary" {% if quality_blockers or not risk_allowed %}disabled title="Resolve the blockers and enable risk consent before approving"{% endif %}>Approve and submit</button></form>
+    <form method="post" action="/operations/{{ operation.id }}/deny"><button class="ghost">Deny</button></form>
+  </div>
+  {% elif operation.state == 'pending_approval' %}
   <p class="setup-note">This request has no effect until you approve it. The worker will render a tailored PDF and create or update a draft application. It will not open a browser or submit anything.</p>
   <div class="actions">
     <form method="post" action="/operations/{{ operation.id }}/approve"><button class="primary">Approve and render</button></form>
@@ -28,7 +52,12 @@
   {% elif operation.state == 'approved' %}
   <p class="muted">Approved. The worker is waiting to claim this operation. Refresh this page for updates.</p>
   {% elif operation.state == 'running' %}
-  <p class="muted">Rendering in the background. Refresh this page for updates.</p>
+  <p class="muted">{{ 'Submitting in the background. Refresh this page for updates.' if operation.action == 'submit_application' else 'Rendering in the background. Refresh this page for updates.' }}</p>
+  {% elif operation.state == 'succeeded' and operation.action == 'submit_application' %}
+  <p>Application submitted.</p>
+  {% if operation.result.application_id %}<p class="muted">Application ID: {{ operation.result.application_id }}</p>{% endif %}
+  {% if operation.result.ats %}<p class="muted">ATS: {{ operation.result.ats }}</p>{% endif %}
+  {% if operation.result.warnings %}<p class="muted">Warnings: {{ operation.result.warnings | join('; ') }}</p>{% endif %}
   {% elif operation.state == 'succeeded' %}
   <p>Resume rendered and attached to the draft application.</p>
   {% if artifact_url %}<p><a class="button primary" href="{{ artifact_url }}">Open tailored resume PDF</a></p>{% endif %}
@@ -36,6 +65,9 @@
   {% if operation.result.warnings %}<p class="muted">Warnings: {{ operation.result.warnings | join('; ') }}</p>{% endif %}
   {% elif operation.error_message %}
   <div class="flash bad">{{ operation.error_code }}: {{ operation.error_message }}</div>
+  {% if operation.action == 'submit_application' and operation.error_code == 'CAPTCHA_REQUIRED' %}
+  <p class="muted">Solve the challenge manually in the browser, then use the job page to review or retry with a new approval.</p>
+  {% endif %}
   {% endif %}
 
   <p><a href="/operations">Back to operations</a> · <a href="/jobs/{{ operation.payload.job_id }}">Open job</a></p>

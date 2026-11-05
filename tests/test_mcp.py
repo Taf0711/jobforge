@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import yaml
 
 from jobforge import db
 from jobforge.config import Config, BrowserConfig, EmailConfig, LLMConfig, ServerConfig
-from jobforge.models import Job, MatchResult, Profile
+from jobforge.models import Job, MatchResult, Preferences, Profile
 
 pytest.importorskip("mcp")
 
@@ -126,6 +127,9 @@ def test_mcp_stdio_lists_tools_and_serves_reads(tmp_path: Path):
             assert names == [
                 "jobforge_status",
                 "jobforge_search_jobs",
+                "jobforge_scan",
+                "jobforge_score",
+                "jobforge_build_queue",
                 "jobforge_get_job",
                 "jobforge_explain_fit",
                 "jobforge_get_readiness",
@@ -137,6 +141,7 @@ def test_mcp_stdio_lists_tools_and_serves_reads(tmp_path: Path):
                 "jobforge_dashboard",
                 "jobforge_open_dashboard",
                 "jobforge_request_resume",
+                "jobforge_request_submission",
                 "jobforge_get_operation",
                 "jobforge_list_operations",
             ]
@@ -162,6 +167,11 @@ def test_mcp_stdio_lists_tools_and_serves_reads(tmp_path: Path):
             by_name = {tool.name: tool for tool in listed.tools}
             assert by_name["jobforge_remember"].annotations.read_only_hint is False
             assert by_name["jobforge_forget"].annotations.destructive_hint is True
+            assert by_name["jobforge_scan"].annotations.read_only_hint is False
+            assert by_name["jobforge_score"].annotations.read_only_hint is False
+            assert by_name["jobforge_build_queue"].annotations.read_only_hint is False
+            assert by_name["jobforge_request_submission"].annotations.read_only_hint is False
+            assert by_name["jobforge_request_submission"].annotations.destructive_hint is True
             assert by_name["jobforge_status"].title == "JobForge status"
             assert by_name["jobforge_status"].output_schema["required"][0] == "schema_version"
             search_schema = by_name["jobforge_search_jobs"].input_schema
@@ -176,6 +186,10 @@ def test_mcp_stdio_lists_tools_and_serves_reads(tmp_path: Path):
             assert status.structured_content["ok"] is True
             assert status.structured_content["data"]["profile"]["label"] == "MCP Test"
             assert status.structured_content["data"]["capabilities"]["read_only"] is True
+
+            blocked_scan = await client.call_tool("jobforge_scan", {})
+            assert blocked_scan.is_error is True
+            assert blocked_scan.structured_content["error"]["code"] == "SCOPE_DENIED"
 
             search = await client.call_tool("jobforge_search_jobs", {"limit": 1})
             assert search.is_error is False
@@ -371,5 +385,195 @@ def test_mcp_memory_and_resume_request_require_explicit_scopes(tmp_path: Path):
             )
             assert forgotten.is_error is False
             assert forgotten.structured_content["data"]["deleted"] is True
+
+    asyncio.run(exercise())
+
+
+def test_mcp_write_tools_are_scope_gated_and_profile_bound(tmp_path: Path):
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    config_path, instance_id, connection_id, job_id = _seed(tmp_path)
+    conn = db.connect(tmp_path / "data" / "jobforge.sqlite3")
+    db.update_agent_connection_scopes(
+        conn,
+        connection_id,
+        [
+            "jobs:read",
+            "matches:read",
+            "scan:run",
+            "matches:write",
+            "queue:write",
+            "submission:request",
+        ],
+    )
+    profile = db.get_active_profile(conn)
+    db.save_preferences(conn, int(profile.id or 0), Preferences(min_match=0))
+    conn.close()
+    repo = Path(__file__).resolve().parents[1]
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-m",
+            "jobforge",
+            "--config",
+            str(config_path),
+            "mcp",
+            "serve",
+            "--connection",
+            connection_id,
+            "--instance",
+            instance_id,
+        ],
+        cwd=str(repo),
+    )
+
+    async def exercise() -> None:
+        async with Client(params) as client:
+            status = await client.call_tool("jobforge_status", {})
+            capabilities = status.structured_content["data"]["capabilities"]
+            assert capabilities["read_only"] is False
+            assert capabilities["scan"] is True
+            assert capabilities["score"] is True
+            assert capabilities["queue"] is True
+            assert capabilities["submission"] is True
+
+            scanned = await client.call_tool("jobforge_scan", {"sources": []})
+            assert scanned.is_error is False
+            assert scanned.structured_content["data"]["scanned"] == 0
+
+            scored = await client.call_tool(
+                "jobforge_score", {"job_ids": [job_id], "limit": 10}
+            )
+            assert scored.is_error is False
+            assert scored.structured_content["data"]["scored"] == 1
+
+            queued = await client.call_tool("jobforge_build_queue", {"limit": 1})
+            assert queued.is_error is False
+            assert queued.structured_content["data"]["items"][0]["job_id"] == job_id
+
+            requested = await client.call_tool(
+                "jobforge_request_submission",
+                {"job_id": job_id, "idempotency_key": "submit-mcp-1"},
+            )
+            assert requested.is_error is False
+            data = requested.structured_content["data"]
+            assert data["action"] == "submit_application"
+            assert data["state"] == "pending_approval"
+            assert data["submission_performed_by_jobforge"] is False
+            assert data["risk"]["authorized"] is False
+
+            fetched = await client.call_tool(
+                "jobforge_get_operation",
+                {"operation_id": data["operation_id"]},
+            )
+            assert fetched.is_error is False
+            assert fetched.structured_content["data"]["state"] == "pending_approval"
+
+    asyncio.run(exercise())
+
+
+def test_mcp_score_uses_the_bound_profile_not_the_active_one(tmp_path: Path):
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    config_path, instance_id, connection_id, job_id = _seed(tmp_path)
+    conn = db.connect(tmp_path / "data" / "jobforge.sqlite3")
+    bound = db.get_active_profile(conn)
+    assert bound is not None
+    other_id = db.save_profile(conn, Profile(name="Other profile"))
+    db.set_active_profile(conn, other_id)
+    db.update_agent_connection_scopes(conn, connection_id, ["matches:write"])
+    conn.execute("DELETE FROM matches WHERE profile_id=?", (int(bound.id or 0),))
+    conn.commit()
+    conn.close()
+    repo = Path(__file__).resolve().parents[1]
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-m",
+            "jobforge",
+            "--config",
+            str(config_path),
+            "mcp",
+            "serve",
+            "--connection",
+            connection_id,
+            "--instance",
+            instance_id,
+        ],
+        cwd=str(repo),
+    )
+
+    async def exercise() -> None:
+        async with Client(params) as client:
+            scored = await client.call_tool(
+                "jobforge_score", {"job_ids": [job_id], "limit": 10}
+            )
+            assert scored.is_error is False
+            assert scored.structured_content["data"]["scored"] == 1
+
+    asyncio.run(exercise())
+    conn = db.connect(tmp_path / "data" / "jobforge.sqlite3")
+    try:
+        assert db.get_match(conn, job_id, int(bound.id or 0)) is not None
+        assert db.get_match(conn, job_id, other_id) is None
+        active = db.get_active_profile(conn)
+        assert active is not None and int(active.id or 0) == other_id
+    finally:
+        conn.close()
+
+
+def test_mcp_queue_refuses_a_shared_queue_from_another_profile(tmp_path: Path):
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    config_path, instance_id, connection_id, job_id = _seed(tmp_path)
+    conn = db.connect(tmp_path / "data" / "jobforge.sqlite3")
+    other_id = db.save_profile(conn, Profile(name="Other profile"))
+    db.update_agent_connection_scopes(conn, connection_id, ["queue:write"])
+    conn.close()
+    queue_path = tmp_path / "data" / "queue.json"
+    queue_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "items": [
+                    {
+                        "job_id": job_id,
+                        "profile_id": other_id,
+                        "status": "pending",
+                        "score": 80,
+                        "company": "Other Co",
+                        "title": "Other Role",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    repo = Path(__file__).resolve().parents[1]
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-m",
+            "jobforge",
+            "--config",
+            str(config_path),
+            "mcp",
+            "serve",
+            "--connection",
+            connection_id,
+            "--instance",
+            instance_id,
+        ],
+        cwd=str(repo),
+    )
+
+    async def exercise() -> None:
+        async with Client(params) as client:
+            result = await client.call_tool("jobforge_build_queue", {"limit": 1})
+            assert result.is_error is True
+            assert result.structured_content["error"]["code"] == "PROFILE_QUEUE_CONFLICT"
 
     asyncio.run(exercise())

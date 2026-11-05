@@ -130,11 +130,13 @@ def main() -> int:
         if args.expect_account_wall:
             ok = account_wall and report.submitted is False and not report.captcha
         else:
+            # A captcha is a valid handoff: the fill is useful and the smoke
+            # must never submit. The invariant is no submission, not a
+            # captcha-free form.
             ok = (
                 report.resume_uploaded
                 and email_filled
                 and report.submitted is False
-                and not report.captcha
             )
         payload = {"ok": ok, "checks": checks}
         print(json.dumps(payload, indent=2) if args.json else payload)

@@ -1,6 +1,6 @@
 # JobForge
 
-A local-first job-search workbench for your coding agent. JobForge finds public-ATS jobs, scores fit, tailors a verified one-page resume, and opens a review-only application form. The agent never submits; you review and click Submit.
+A local-first job-search workbench for your coding agent. JobForge finds public-ATS jobs, scores fit, tailors a verified one-page resume, and opens a review-only application form. The agent never submits without explicit authorization; by default you review and click Submit. Bounded, risk-consented autopilot submission is available when you opt in.
 
 The optional dashboard is a local review console, not a separate job-search app.
 
@@ -69,6 +69,7 @@ jobforge tailor --job 42              # build a resume
 jobforge apply --job 42               # fill + review; never submit
 jobforge autopilot run --limit 5      # sequential, risk-gated pass
 jobforge queue build --limit 10       # supervised queue
+jobforge reparse-profile --dry-run     # preview project/fact refresh from resume
 jobforge providers list               # optional, for the built-in agent
 jobforge agent "Find my best matches" # built-in agent, optional
 ```
@@ -108,6 +109,7 @@ The quality gate blocks below-threshold, duplicate-company, already-submitted, m
 | `jobforge queue ...` | Build, prepare, and review the supervised queue |
 | `jobforge autopilot run` | Sequential risk-consented pass |
 | `jobforge risk status` | Show consent and daily usage |
+| `jobforge reparse-profile` | Refresh only projects/facts from a saved resume |
 | `jobforge export` | Export local data |
 
 ## Configuration
@@ -117,6 +119,10 @@ The quality gate blocks below-threshold, duplicate-company, already-submitted, m
 Scan uses the grouped `sources:` boards by default. Set `scan.sources_path` to a flat registry (the resume-forge `scan_sources.yml` format) to use per-source competition profiles and first-pass filters. See `docs/39-scan.md`.
 
 Feature flags: `setup_wizard`, `github_connections`, `scoring_v2`, `agent`, `agent_integrations`. See `docs/21-feature-flags.md`.
+
+MCP write tools are opt-in. `jobforge_request_submission` is **experimental** until a successful live submit smoke; it still requires dashboard approval and risk consent.
+
+Resume imports default to `resume_import.project_mode: merge`: matching projects are updated, new projects are appended, and curated projects from resume-forge or GitHub are preserved. Set `replace` to mirror the resume's project section exactly. Change it in **Settings → Resume imports** or in `config.yml`.
 
 ## Docs
 

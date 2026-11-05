@@ -1,6 +1,6 @@
 # Agent workbench (MCP preview)
 
-Profile-bound MCP tools for local agents. Read tools are the default. Optional scopes add memory, dashboard launch, and approval-gated resume requests. There is no submit tool.
+Profile-bound MCP tools for local agents. Read tools are the default. Optional scopes add memory, dashboard launch, scan/score/queue writes, and approval-gated resume or submission requests. The submission tool only creates a pending operation; a human must approve it in the dashboard. There is no unapproved submit path.
 
 Status: protocol-tested preview. Host certification is not complete.
 
@@ -8,7 +8,7 @@ Status: protocol-tested preview. Host certification is not complete.
 
 ```bash
 jobforge integrations setup --profile 4 --client generic \
-  --scopes profile:resume_context,applications:summary,memory:read_write,proposals:create
+  --scopes profile:resume_context,applications:summary,memory:read_write,proposals:create,scan:run,matches:write,queue:write,submission:request
 jobforge integrations list
 ```
 
@@ -29,8 +29,12 @@ jobforge integrations list
 | `jobforge_list_applications` | `applications:summary` | Status/timestamps; no answers or paths |
 | `jobforge_remember/recall/forget` | `memory:read_write` | Profile-scoped notes |
 | `jobforge_dashboard/open_dashboard` | none | Local console URL |
+| `jobforge_scan` | `scan:run` | Scan configured sources; no arbitrary URLs |
+| `jobforge_score` | `matches:write` | Deep-score unscored/all/explicit/top jobs |
+| `jobforge_build_queue` | `queue:write` | Build a bounded supervised queue |
 | `jobforge_request_resume` | `proposals:create`, `profile:resume_context` | Pending human-approved render |
-| `jobforge_get/list_operations` | `proposals:create` | Safe operation state and artifact URL |
+| `jobforge_request_submission` | `submission:request` | Pending one-use submission approval |
+| `jobforge_get/list_operations` | none (ownership-checked) | Safe operation state and artifact URL |
 
 ## MCP and CLI
 
@@ -40,7 +44,7 @@ jobforge integrations config --connection conn_...
 printf '{"limit":5}' | jobforge tools call jobforge_search_jobs --connection conn_...
 ```
 
-The MCP transport is stdio-only; stdout is protocol-only. The server rechecks connection, scopes, and feature flags on every call. `tools call` uses a read-only SQLite connection for read tools.
+The MCP transport is stdio-only; stdout is protocol-only. The server rechecks connection, scopes, and feature flags on every call. `tools call` uses a read-only SQLite connection for read tools and a writable connection for action tools.
 
 ## Safety
 
@@ -51,10 +55,10 @@ The MCP transport is stdio-only; stdout is protocol-only. The server rechecks co
 - Profile contact data, answers, notes, paths, and screenshots are redacted.
 - Output is capped at 64 KiB; `CONTEXT_TOO_LARGE` instead of truncation.
 - Read tools never call a provider, Typst, or a browser.
-- The resume worker rechecks connection, profile binding, and scopes before rendering.
+- The operation worker rechecks connection, profile binding, scopes, risk consent, quality gate, and daily cap before rendering or submitting.
 
 Schema v6 stores instances, connections, memories, operations, and operation events. Connection IDs are selectors, not secrets.
 
 ## Not implemented
 
-Host certification, host-generated resume proposals, attachments/review receipts, and scan/score/queue/browser/submit actions.
+Host certification, host-generated resume proposals, attachments/review receipts, approval-gated review-only browser operations, and MCP-triggered autopilot runs.

@@ -181,6 +181,8 @@ def _operation_public(operation: dict[str, Any]) -> dict[str, Any]:
             "llm_model",
             "mode",
             "facts",
+            "submitted",
+            "captcha",
         )
         if key in result
     }
@@ -199,7 +201,10 @@ def _operation_public(operation: dict[str, Any]) -> dict[str, Any]:
         "result": safe_result,
         "error_code": operation.get("error_code") or "",
         "error_message": operation.get("error_message") or "",
-        "submission_performed_by_jobforge": False,
+        "submission_performed_by_jobforge": bool(
+            operation.get("action") == "submit_application"
+            and result.get("submitted") is True
+        ),
     }
 
 
@@ -262,6 +267,119 @@ def list_operations(
     ]
 
 
+def scan_jobs(
+    context: QueryContext, params: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Run one bounded scan for the connection's bound profile."""
+    from .. import services
+
+    stats = services.scan(
+        context.config,
+        context.conn,
+        only=params.get("sources") or None,
+        profile_id=context.profile_id,
+    )
+    return {
+        "new": int(stats.get("new") or 0),
+        "seen": int(stats.get("seen") or 0),
+        "filtered": int(stats.get("filtered") or 0),
+        "deferred": int(stats.get("deferred") or 0),
+        "scanned": int(stats.get("scanned") or 0),
+        "per_source": dict(stats.get("per_source") or {}),
+        "errors": [str(item)[:300] for item in (stats.get("errors") or [])[:20]],
+    }, [{"rel": "dashboard", "path": "/jobs"}]
+
+
+def score_jobs(
+    context: QueryContext, params: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Deep-score stored jobs for the bound profile."""
+    from .. import services
+
+    stats = services.rescore(
+        context.config,
+        context.conn,
+        only_unscored=(
+            params["scope"] == "unscored"
+            and not params["job_ids"]
+            and params["top"] is None
+        ),
+        job_ids=params["job_ids"] or None,
+        top=params["top"],
+        limit=params["limit"],
+        profile_id=context.profile_id,
+    )
+    return {
+        "scored": int(stats.get("scored") or 0),
+        "total": int(stats.get("total") or 0),
+        "comp": dict(stats.get("comp") or {}),
+    }, [{"rel": "dashboard", "path": "/jobs"}]
+
+
+def build_queue(
+    context: QueryContext, params: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Build the supervised queue for the bound profile."""
+    from ..queue import Queue
+
+    queue = Queue(Path(context.config.data_dir) / "queue.json")
+    if any(item.profile_id != context.profile_id for item in queue.list_items()):
+        raise ToolError(
+            "PROFILE_QUEUE_CONFLICT",
+            "The shared queue contains items for another profile. Resolve them first.",
+        )
+    items = queue.build(
+        context.conn,
+        context.profile,
+        context.prefs,
+        limit=int(params["limit"]),
+        min_score=float(context.prefs.min_match or 0),
+    )
+    return {
+        "items": [
+            {
+                "job_id": int(item.job_id),
+                "status": item.status,
+                "score": round(float(item.score), 1),
+                "company": item.company[:200],
+                "title": item.title[:200],
+            }
+            for item in items
+        ],
+        "summary": queue.summary(),
+    }, [{"rel": "dashboard", "path": "/queue"}]
+
+
+def request_submission(
+    context: QueryContext, params: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Create a pending one-use submission operation; never submit here."""
+    from .. import risk
+
+    job = db.get_job(context.conn, int(params["job_id"]))
+    if job is None:
+        raise ToolError("NOT_FOUND", "Job not found.")
+    try:
+        operation = db.create_agent_operation(
+            context.conn,
+            connection_id=context.connection_id,
+            profile_id=context.profile_id,
+            action="submit_application",
+            payload={"job_id": int(job.id or 0)},
+            idempotency_key=params["idempotency_key"],
+        )
+    except ValueError as exc:
+        raise ToolError("IDEMPOTENCY_CONFLICT", str(exc)) from exc
+    allowed, reason, policy = risk.can_submit_unattended(context.config)
+    data = _operation_public(operation)
+    data["risk"] = {
+        "authorized": bool(allowed),
+        "reason": reason,
+        "daily_cap": int(policy.daily_submit_cap),
+    }
+    return data, [{"rel": "approval", "path": f"/operations/{operation['id']}"}]
+
+
 ACTION_TOOLS = {
     "jobforge_remember",
     "jobforge_recall",
@@ -269,8 +387,12 @@ ACTION_TOOLS = {
     "jobforge_dashboard",
     "jobforge_open_dashboard",
     "jobforge_request_resume",
+    "jobforge_request_submission",
     "jobforge_get_operation",
     "jobforge_list_operations",
+    "jobforge_scan",
+    "jobforge_score",
+    "jobforge_build_queue",
 }
 
 
@@ -284,6 +406,10 @@ def dispatch(
         "jobforge_dashboard": dashboard,
         "jobforge_open_dashboard": open_dashboard,
         "jobforge_request_resume": request_resume,
+        "jobforge_request_submission": request_submission,
+        "jobforge_scan": scan_jobs,
+        "jobforge_score": score_jobs,
+        "jobforge_build_queue": build_queue,
         "jobforge_get_operation": get_operation,
         "jobforge_list_operations": list_operations,
     }

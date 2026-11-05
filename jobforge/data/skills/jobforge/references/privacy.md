@@ -1,7 +1,7 @@
 # Privacy and data boundaries
 
-The read-only interface is designed to avoid exporting the most sensitive
-JobForge data.
+The workbench interface is designed to avoid exporting the most sensitive
+JobForge data, including from write and approval operations.
 
 Never repeat or request:
 

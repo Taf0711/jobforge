@@ -30,7 +30,7 @@ from ..agent.providers import (
     resolve_provider,
 )
 from ..automation.base import is_manual_only_url
-from ..config import Config, FeatureFlags, load_config
+from ..config import Config, FeatureFlags, ResumeImportConfig, load_config
 from ..integrations import github as github_integration
 from ..locking import ActionBusy, action_lock
 from ..matching.experience import coerce_years
@@ -1016,10 +1016,54 @@ def create_app(config: Config | None = None) -> FastAPI:
             if result.get("application_id")
             else ""
         )
+        quality_blockers: list[dict[str, str]] = []
+        quality_warnings: list[dict[str, str]] = []
+        risk_allowed = False
+        risk_reason = ""
+        risk_cap = 0
+        if operation.get("action") == "submit_application" and job is not None:
+            profile = db.get_profile(conn, int(operation["profile_id"]))
+            if profile is not None:
+                prefs = db.get_preferences(conn, int(operation["profile_id"]))
+                report = quality.evaluate(
+                    conn, job, profile, prefs, require_prepared=False
+                )
+                quality_blockers = [
+                    {"name": check.name, "detail": check.detail}
+                    for check in quality.blocking_checks(report)
+                ]
+                quality_warnings = [
+                    {"name": check.name, "detail": check.detail}
+                    for check in report.checks
+                    if not check.passed and check.severity != quality.BLOCKER
+                ]
+                existing = conn.execute(
+                    "SELECT resume_path FROM applications WHERE job_id=? AND profile_id=?",
+                    (int(job.id or 0), int(operation["profile_id"])),
+                ).fetchone()
+                resume = (
+                    (existing["resume_path"] if existing else "")
+                    or profile.resume_path
+                    or str(cfg.resume_path or "")
+                )
+                if not resume or not Path(resume).is_file():
+                    quality_blockers.append(
+                        {
+                            "name": "resume",
+                            "detail": "No resume PDF is attached; request and approve a tailored resume first.",
+                        }
+                    )
+            risk_allowed, risk_reason, policy = risk.can_submit_unattended(cfg)
+            risk_cap = int(policy.daily_submit_cap)
         return {
             "operation": operation,
             "job": job,
             "artifact_url": artifact_url,
+            "quality_blockers": quality_blockers,
+            "quality_warnings": quality_warnings,
+            "risk_allowed": risk_allowed,
+            "risk_reason": risk_reason,
+            "risk_cap": risk_cap,
         }
 
     @app.get("/operations", response_class=HTMLResponse)
@@ -1183,6 +1227,21 @@ def create_app(config: Config | None = None) -> FastAPI:
     def activate_profile(profile_id: int, conn: sqlite3.Connection = Depends(get_conn)):
         db.set_active_profile(conn, profile_id)
         return RedirectResponse("/profiles", status_code=303)
+
+    @app.post("/profiles/reparse")
+    @locked_write
+    def reparse_profile(conn: sqlite3.Connection = Depends(get_conn)):
+        try:
+            result = services.reparse_profile_projects(cfg, conn)
+            msg = (
+                f"Reparsed projects ({result['mode']}): "
+                f"{result['projects_before']} -> {result['projects_after']}, "
+                f"{result['updated']} updated, {result['added']} added, "
+                f"{result['preserved']} preserved."
+            )
+        except (services.SetupRequired, ValueError) as exc:
+            msg = str(exc)
+        return RedirectResponse(f"/profiles?msg={_msg(msg)}", status_code=303)
 
     @app.get("/connections", response_class=HTMLResponse)
     def connections_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
@@ -1449,6 +1508,19 @@ def create_app(config: Config | None = None) -> FastAPI:
             msg = "Feature flags saved."
         except (OSError, yaml.YAMLError, ValueError) as exc:
             msg = f"Could not save feature flags: {exc}"
+        return RedirectResponse(f"/settings?msg={_msg(msg)}", status_code=303)
+
+    @app.post("/settings/resume")
+    @locked_write
+    def save_resume_import_settings(project_mode: str = Form("merge")):
+        mode = project_mode if project_mode in {"merge", "replace"} else "merge"
+        value = ResumeImportConfig(project_mode=mode)
+        try:
+            _write_config_sections(cfg, {"resume_import": value.to_dict()})
+            cfg.resume_import = value
+            msg = f"Resume project handling saved: {mode}."
+        except (OSError, yaml.YAMLError, ValueError) as exc:
+            msg = f"Could not save resume import setting: {exc}"
         return RedirectResponse(f"/settings?msg={_msg(msg)}", status_code=303)
 
     @app.get("/settings/risk", response_class=HTMLResponse)

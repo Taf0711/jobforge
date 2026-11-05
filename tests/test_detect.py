@@ -26,3 +26,19 @@ def test_generic_apply_button_is_not_treated_as_submit():
         submit.set_content('<button type="submit">Submit application</button>')
         assert submit_button(submit) is not None
         browser.close()
+
+
+def test_captcha_present_detects_hidden_hcaptcha_widget():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content(
+            '<div data-hcaptcha-widget-id="widget-1" style="display:none"></div>'
+        )
+        assert captcha_present(page) == "[data-hcaptcha-widget-id]"
+        page.set_content(
+            '<iframe src="https://newassets.hcaptcha.com/captcha/v1/abc" '
+            'style="display:none"></iframe>'
+        )
+        assert captcha_present(page) == 'iframe[src*="hcaptcha"]'
+        browser.close()

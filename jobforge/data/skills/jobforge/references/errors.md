@@ -9,6 +9,13 @@
 | `NOT_FOUND` | Do not infer existence in another profile. |
 | `CONNECTION_DISABLED` | Stop; the human must enable the connection. |
 | `SCOPE_DENIED` | Report the missing scope; do not use another data source. |
+| `PROFILE_QUEUE_CONFLICT` | Stop; the shared queue has another profile's items. Do not clear or reinterpret them. |
+| `QUALITY_BLOCKED` | Report the blockers; do not approve or open a browser. |
+| `RISK_NOT_AUTHORIZED` | Report that the human must enable the explicit risk consent; never enable it yourself. |
+| `DAILY_CAP_REACHED` | Stop for the day or apply manually; do not bypass the cap. |
+| `CAPTCHA_REQUIRED` | Hand off to the human; there is no solver. |
+| `SUBMISSION_NOT_CONFIRMED` | Do not claim submission; report the safe state. |
+| `OPERATION_EXPIRED` | Create a new request only if the user asks; approval is one-use. |
 | `STALE_CONTEXT` | Fetch the first page again with the current revision. |
 | `CONTEXT_TOO_LARGE` | Narrow the query or request a smaller page. |
 | `BUSY` | Another JobForge action is active; wait and retry the read. |

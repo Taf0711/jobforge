@@ -81,4 +81,19 @@
   </form>
   <p class="setup-note">Env overrides: <code>JOBFORGE_FEATURE_SETUP_WIZARD</code>, <code>JOBFORGE_FEATURE_GITHUB_CONNECTIONS</code>, <code>JOBFORGE_FEATURE_SCORING_V2</code>, <code>JOBFORGE_FEATURE_AGENT</code>, <code>JOBFORGE_FEATURE_AGENT_INTEGRATIONS</code>. Changing the scoring mode does not rewrite existing matches; run <strong>Score</strong> to apply it.</p>
 </section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Resume imports</h2><span class="pill">local config</span></div>
+  <p class="muted">Choose what happens when a resume is uploaded or reparsed. This only affects projects and project facts; experience, education, skills, preferences, and applications are untouched.</p>
+  <form method="post" action="/settings/resume" class="stack">
+    <label>Project handling
+      <select name="project_mode">
+        <option value="merge" {{ 'selected' if cfg.resume_import.project_mode == 'merge' else '' }}>Merge — keep curated projects, update matching titles, append new projects</option>
+        <option value="replace" {{ 'selected' if cfg.resume_import.project_mode == 'replace' else '' }}>Replace — mirror the resume's project section and drop other projects</option>
+      </select>
+    </label>
+    <div class="actions"><button class="primary">Save resume import setting</button></div>
+  </form>
+  <p class="setup-note"><strong>Merge</strong> is the default and protects projects imported from resume-forge or GitHub. <strong>Replace</strong> is useful when the resume is the single source of truth. Env override: <code>JOBFORGE_RESUME_PROJECT_MODE</code>.</p>
+</section>
 {% endblock %}

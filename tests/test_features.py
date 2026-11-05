@@ -15,6 +15,7 @@ from jobforge.config import (
     ServerConfig,
     load_config,
 )
+from jobforge.models import Profile
 from jobforge.web.app import create_app
 
 
@@ -185,6 +186,53 @@ def test_settings_feature_flags_write_config_and_take_effect(tmp_path: Path):
     assert all(cfg.features.to_dict().values())
     assert client.get("/setup").status_code == 200
     assert client.get("/connections").status_code == 200
+
+
+def test_resume_project_mode_config_and_env(tmp_path: Path, monkeypatch):
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(
+        "resume_import:\n  project_mode: replace\n", encoding="utf-8"
+    )
+    assert load_config(config_path).resume_import.project_mode == "replace"
+
+    config_path.write_text(
+        "resume_import:\n  project_mode: nonsense\n", encoding="utf-8"
+    )
+    assert load_config(config_path).resume_import.project_mode == "merge"
+
+    monkeypatch.setenv("JOBFORGE_RESUME_PROJECT_MODE", "replace")
+    assert load_config(config_path).resume_import.project_mode == "replace"
+    monkeypatch.setenv("JOBFORGE_RESUME_PROJECT_MODE", "merge")
+    assert load_config(config_path).resume_import.project_mode == "merge"
+
+
+def test_settings_resume_mode_writes_config_and_takes_effect(tmp_path: Path):
+    cfg = _config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    profile_id = db.save_profile(conn, Profile(name="web-test"))
+    db.set_active_profile(conn, profile_id)
+    db.setting_set(conn, "setup_complete", "1")
+    conn.close()
+    client = TestClient(create_app(cfg))
+
+    page = client.get("/settings")
+    assert page.status_code == 200
+    assert "Resume imports" in page.text
+    assert 'name="project_mode"' in page.text
+
+    saved = client.post(
+        "/settings/resume", data={"project_mode": "replace"}, follow_redirects=False
+    )
+    assert saved.status_code == 303
+    assert cfg.resume_import.project_mode == "replace"
+    written = yaml.safe_load(Path(cfg.config_path).read_text(encoding="utf-8"))
+    assert written["resume_import"] == {"project_mode": "replace"}
+
+    invalid = client.post(
+        "/settings/resume", data={"project_mode": "nonsense"}, follow_redirects=False
+    )
+    assert invalid.status_code == 303
+    assert cfg.resume_import.project_mode == "merge"
 
 
 def test_tailoring_mode_config_and_env(tmp_path: Path, monkeypatch):

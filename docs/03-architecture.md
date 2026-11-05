@@ -7,7 +7,7 @@ JobForge is a local-first, single-user job-search workbench. It runs on your mac
 1. Local only: no account, cloud, or telemetry.
 2. Explainable: every score has reasons and gaps.
 3. Truthful: tailoring may reorder or rephrase verified facts, never invent.
-4. Supervised: the default flow fills the form and stops.
+4. Supervised: the default flow fills the form and stops. Submission requires explicit operation-bound authorization or the risk-consented autopilot modes.
 5. Public job data only; no Jobbie API or authenticated scraping.
 6. No captcha arms race: detect, pause, hand off.
 7. One service layer for CLI, HTTP, and MCP.
@@ -95,7 +95,7 @@ IMAP poll → verification codes / replies → classify → event + status
 | XSS / injection | Jinja autoescape, no unsafe HTML filter, parameterized SQL, CSP |
 | Upload path traversal | basename-only names, UUID paths, confined output root |
 | Secret leakage | keychain/0600/env only; never in config, DB, exports, templates, logs, or tool output |
-| Agent privilege | no shell/SQL/arbitrary URL/browser-submit tool; writes are per-message opt-in |
+| Agent privilege | no shell/SQL/arbitrary URL/browser-submit tool; writes are per-message opt-in in the built-in agent and scope/operation-gated over MCP |
 | Unattended abuse | off by default; 10/day shared cap; consent phrase; quality gate; captcha/2FA stop |
 | Credential theft | no password storage; persistent browser profile stays local |
 | Rate limits | per-host token bucket and backoff |

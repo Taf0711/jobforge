@@ -1342,6 +1342,24 @@ def cmd_import_profile(args) -> int:
     return 0
 
 
+def cmd_reparse_profile(args) -> int:
+    cfg, conn = _connect(args)
+    try:
+        result = services.reparse_profile_projects(
+            cfg,
+            conn,
+            profile_id=args.profile,
+            resume_path=args.resume,
+            mode=args.mode,
+            dry_run=args.dry_run,
+        )
+    except (services.SetupRequired, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
 def cmd_import_resume_forge(args) -> int:
     cfg, conn = _connect(args)
     from .integrations.resume_forge import (
@@ -1585,6 +1603,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("import-profile", help="import a resume or profile YAML/JSON")
     p.add_argument("--file", required=True)
     p.set_defaults(func=cmd_import_profile)
+
+    p = sub.add_parser(
+        "reparse-profile",
+        help="refresh only a profile's projects and facts from its resume",
+    )
+    p.add_argument("--profile", type=int, help="profile id (default: active profile)")
+    p.add_argument("--resume", help="resume path override (PDF, DOCX, TXT, or MD)")
+    p.add_argument("--mode", choices=["merge", "replace"], help="project-bank handling")
+    p.add_argument("--dry-run", action="store_true", help="show counts without saving")
+    p.set_defaults(func=cmd_reparse_profile)
 
     p = sub.add_parser("import-resume-forge", help="import a resume-forge profile/projects/evidence/tracker")
     p.add_argument("--profile", required=True, help="resume-forge profile.yml")

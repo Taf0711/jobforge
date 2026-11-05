@@ -13,7 +13,13 @@ from typing import Any
 from . import db, quality
 from .config import Config
 from .matching.experience import coerce_years
-from .matching.resume import load_profile_file, merge_profiles, profile_from_resume
+from .matching.projects import merge_project_bank, normalize_project_mode
+from .matching.resume import (
+    load_profile_file,
+    merge_profiles,
+    parse_resume,
+    profile_from_resume,
+)
 from .matching.score import score_all, score_job
 from .models import (
     Application,
@@ -159,11 +165,110 @@ def refresh_profile_from_resume(config: Config, conn: sqlite3.Connection, path: 
     profile, _ = ensure_profile(config, conn)
     parsed = profile_from_resume(path)
     merged = merge_profiles(profile, parsed)
+    project_result = merge_project_bank(
+        profile.projects,
+        parsed.projects,
+        existing_facts=profile.facts,
+        mode=config.resume_import.project_mode,
+    )
+    merged.projects = project_result.projects
+    merged.facts = [
+        fact for fact in merged.facts if fact.get("section") != "projects"
+    ] + project_result.project_facts
     merged.id = profile.id
     db.save_profile(conn, merged)
     db.set_active_profile(conn, merged.id or 0)
-    db.log_event(conn, None, "profile_updated", f"resume: {path}")
+    db.log_event(
+        conn,
+        None,
+        "profile_updated",
+        f"resume: {path}; projects={project_result.mode} "
+        f"added={project_result.added} updated={project_result.updated} "
+        f"preserved={project_result.preserved}",
+    )
     return merged
+
+
+@locked_action
+def reparse_profile_projects(
+    config: Config,
+    conn: sqlite3.Connection,
+    *,
+    profile_id: int | None = None,
+    resume_path: str | Path | None = None,
+    mode: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Refresh only a profile's projects and project facts from its resume.
+
+    This is deliberately narrower than ``refresh_profile_from_resume``: it
+    leaves experience, education, skills, preferences, and applications alone.
+    """
+    if profile_id is not None:
+        profile = db.get_profile(conn, profile_id)
+        if profile is None:
+            raise SetupRequired(f"Profile {profile_id} does not exist")
+    else:
+        profile, _ = require_profile(config, conn)
+    assert profile is not None
+
+    path = (
+        Path(resume_path).expanduser()
+        if resume_path
+        else (Path(profile.resume_path) if profile.resume_path else None)
+    )
+    source = ""
+    if path is not None and path.is_file():
+        parsed = profile_from_resume(path)
+        source = str(path)
+    elif (profile.resume_text or "").strip():
+        parsed = parse_resume(profile.resume_text, fallback_name=profile.name)
+        source = "stored resume text"
+    else:
+        raise ValueError(
+            "No resume is available for this profile; set a resume path or pass --resume"
+        )
+
+    projects_before = len(profile.projects)
+    selected_mode = normalize_project_mode(mode or config.resume_import.project_mode)
+    result = merge_project_bank(
+        profile.projects,
+        parsed.projects,
+        existing_facts=profile.facts,
+        mode=selected_mode,
+    )
+    non_project_facts = [
+        fact for fact in profile.facts if fact.get("section") != "projects"
+    ]
+    facts = non_project_facts + result.project_facts
+    if not dry_run:
+        profile.projects = result.projects
+        profile.facts = facts
+        if resume_path and path is not None:
+            profile.resume_path = str(path)
+        db.save_profile(conn, profile)
+        db.log_event(
+            conn,
+            None,
+            "profile_projects_reparsed",
+            f"profile={profile.id} mode={selected_mode} source={source} "
+            f"added={result.added} updated={result.updated} "
+            f"preserved={result.preserved}",
+        )
+    return {
+        "profile_id": profile.id,
+        "profile_name": profile.name,
+        "mode": selected_mode,
+        "resume": source,
+        "dry_run": dry_run,
+        "projects_before": projects_before,
+        "projects_after": len(result.projects),
+        "added": result.added,
+        "updated": result.updated,
+        "preserved": result.preserved,
+        "project_facts": len(result.project_facts),
+        "facts_total": len(facts),
+    }
 
 
 @locked_action
@@ -175,6 +280,7 @@ def scan(
     urls: list[str] | None = None,
     apply_filters: bool = True,
     quick: bool = True,
+    profile_id: int | None = None,
 ) -> dict[str, Any]:
     """Fetch, dedupe, filter, and quick-score jobs.
 
@@ -182,7 +288,11 @@ def scan(
     points at a flat resume-forge registry, that registry is used instead.
     Deep fit is a separate action; scan ranking is intentionally cheap.
     """
-    profile, prefs = require_profile(config, conn)
+    profile, prefs = (
+        require_profile_by_id(conn, profile_id)
+        if profile_id is not None
+        else require_profile(config, conn)
+    )
     run_id = db.start_run(conn, "scan")
     try:
         stats = scan_jobs(
@@ -212,8 +322,14 @@ def rescore(
     only_unscored: bool = False,
     job_ids: list[int] | None = None,
     top: int | None = None,
+    limit: int | None = None,
+    profile_id: int | None = None,
 ) -> dict[str, Any]:
-    profile, prefs = require_profile(config, conn)
+    profile, prefs = (
+        require_profile_by_id(conn, profile_id)
+        if profile_id is not None
+        else require_profile(config, conn)
+    )
     run_id = db.start_run(conn, "score")
     try:
         if job_ids or top:
@@ -252,6 +368,7 @@ def rescore(
                 profile,
                 prefs,
                 only_unscored=only_unscored,
+                limit=limit,
                 scoring_v2=config.features.scoring_v2,
             )
         db.finish_run(conn, run_id, RunStatus.OK.value, result)
@@ -398,6 +515,7 @@ def apply_job(
     resume_path: str | None = None,
     submission_mode: str = "unattended",
     review_only: bool = False,
+    non_interactive: bool | None = None,
     profile_id: int | None = None,
 ) -> dict[str, Any]:
     from .automation.base import run_application
@@ -464,7 +582,11 @@ def apply_job(
             submission_authorized=auto_submit,
             review_only=review_only,
             hold_seconds=hold_seconds,
-            non_interactive=submission_mode == "autopilot",
+            non_interactive=(
+                submission_mode == "autopilot"
+                if non_interactive is None
+                else non_interactive
+            ),
             screenshot_dir=config.data_dir / "screenshots",
             decision_shadow_path=decision_shadow,
             decision_run_id=run_id,

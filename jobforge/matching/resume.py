@@ -249,8 +249,254 @@ def _parse_education(block: str) -> list[dict[str, Any]]:
     return entries
 
 
+PROJECT_LINK_LABELS = {
+    "code",
+    "demo",
+    "github",
+    "link",
+    "live",
+    "paper",
+    "repo",
+    "repository",
+    "slides",
+    "video",
+    "website",
+}
+
+
+def _project_url(text: str) -> str:
+    match = URL.search(text)
+    if match:
+        return match.group(0).rstrip(".,;)")
+    match = re.search(r"(?:www\.)?github\.com/[^\s,;|]+", text, re.IGNORECASE)
+    return ("https://" + match.group(0)) if match else ""
+
+
+def _looks_like_tech_line(line: str) -> bool:
+    lowered = line.strip().lower()
+    if lowered.startswith(("tech:", "technologies:", "stack:", "tools:")):
+        return True
+    if len(line) > 180:
+        return False
+    skills = extract_skills(line)
+    if len(skills) >= 2:
+        return True
+    if "," not in line:
+        return False
+    tokens = [token.strip() for token in line.split(",") if token.strip()]
+    if len(tokens) < 2:
+        return False
+    known = sum(
+        1
+        for token in tokens
+        if canonical(token)
+        or re.fullmatch(r"[A-Za-z][A-Za-z0-9.+#/_-]{1,24}", token)
+    )
+    return known >= 2
+
+
+def _looks_like_project_title(line: str) -> bool:
+    text = line.strip()
+    if not text or len(text) > 120 or text.endswith((".", "!", "?")):
+        return False
+    lowered = text.lower()
+    if lowered.startswith(
+        (
+            "a ",
+            "an ",
+            "and ",
+            "as ",
+            "at ",
+            "built ",
+            "by ",
+            "created ",
+            "designed ",
+            "developed ",
+            "engineered ",
+            "for ",
+            "from ",
+            "implemented ",
+            "in ",
+            "it ",
+            "led ",
+            "managed ",
+            "migrated ",
+            "on ",
+            "owned ",
+            "reduced ",
+            "scaled ",
+            "shipped ",
+            "the ",
+            "then ",
+            "this ",
+            "to ",
+            "we ",
+            "with ",
+            "worked ",
+            "wrote ",
+        )
+    ):
+        return False
+    if text[:1].isupper():
+        return True
+    return bool(re.match(r"^[a-z][\w.-]*\s+\([^)]+\)$", text))
+
+
+def _split_project_header(
+    line: str,
+) -> tuple[str, str, str, str, str]:
+    dates = DATE_RANGE.search(line)
+    start, end = (dates.group(1), dates.group(2)) if dates else ("", "")
+    header = DATE_RANGE.sub("", line).strip(" |—-–")
+    url = _project_url(header)
+    if url:
+        header = header.replace(url, " ").strip(" |—-–")
+    parts = [part.strip() for part in re.split(r"\s*[|—–]\s*", header) if part.strip()]
+    title = parts[0] if parts else header
+    tech_parts: list[str] = []
+    for part in parts[1:]:
+        if part.lower() in PROJECT_LINK_LABELS:
+            continue
+        if _project_url(part):
+            continue
+        tech_parts.append(part)
+    return title, ", ".join(tech_parts), start, end, url
+
+
 def _parse_projects(block: str) -> list[dict[str, Any]]:
-    return _parse_experience(block)
+    """Parse a projects section without treating a tech line as a company.
+
+    Projects have a different shape from jobs: ``Title | Tech line`` followed
+    by bullets, often with no dates or company. Reusing the experience parser
+    merged every project into one entry and swallowed the next title into the
+    previous bullet when the bullet did not end with punctuation.
+    """
+    if not block.strip():
+        return []
+    lines = _clean_lines(block)
+    entries: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    previous_was_bullet = False
+
+    def start_entry(line: str) -> dict[str, Any]:
+        title, tech_line, start, end, url = _split_project_header(line)
+        return {
+            "title": title,
+            "company": "",
+            "location": "",
+            "start": start,
+            "end": end,
+            "tech_line": tech_line,
+            "url": url,
+            "bullets": [],
+        }
+
+    for index, line in enumerate(lines):
+        if BULLET.match(line):
+            if current is None:
+                current = {
+                    "title": "",
+                    "company": "",
+                    "location": "",
+                    "start": "",
+                    "end": "",
+                    "tech_line": "",
+                    "url": "",
+                    "bullets": [],
+                }
+                entries.append(current)
+            text = BULLET.sub("", line).strip()
+            if text:
+                current["bullets"].append(text)
+            previous_was_bullet = True
+            continue
+
+        # Date-only and URL-only lines belong to the project above them.
+        date_only = DATE_RANGE.fullmatch(line.strip())
+        if current is not None and date_only:
+            current["start"] = date_only.group(1)
+            current["end"] = date_only.group(2)
+            previous_was_bullet = False
+            continue
+
+        line_url = _project_url(line)
+        remainder = re.sub(
+            r"https?://\S+|(?:www\.)?github\.com/\S+", "", line
+        ).strip(" |—-–").lower()
+        url_only = bool(line_url) and (
+            not remainder or remainder in PROJECT_LINK_LABELS
+        )
+        if current is not None and url_only:
+            current["url"] = line_url
+            previous_was_bullet = False
+            continue
+
+        if current is not None and not current["bullets"] and _looks_like_tech_line(line):
+            tech_line = re.sub(
+                r"^(?:tech|technologies|stack|tools)\s*:\s*", "", line, flags=re.IGNORECASE
+            ).strip()
+            current["tech_line"] = (
+                f"{current['tech_line']}, {tech_line}".strip(", ")
+                if current["tech_line"]
+                else tech_line
+            )
+            previous_was_bullet = False
+            continue
+
+        has_header_separator = bool(re.search(r"\s[|—–]\s", line))
+        dates = DATE_RANGE.search(line)
+        is_link_label = line.strip().lower() in PROJECT_LINK_LABELS
+        if is_link_label:
+            previous_was_bullet = False
+            continue
+
+        next_is_bullet = index + 1 < len(lines) and bool(BULLET.match(lines[index + 1]))
+        previous_bullet_closed = (
+            previous_was_bullet
+            and current is not None
+            and bool(current["bullets"])
+            and current["bullets"][-1].rstrip().endswith((".", "!", "?"))
+        )
+        starts_new = (
+            current is None
+            or not current["bullets"]
+            or has_header_separator
+            or bool(dates)
+            or bool(_project_url(line))
+            or previous_bullet_closed
+            or (
+                current is not None
+                and bool(current["bullets"])
+                and next_is_bullet
+                and _looks_like_project_title(line)
+            )
+        )
+        # A wrapped bullet that starts a new line is usually lowercase or a
+        # sentence fragment; keep it with the bullet when the previous bullet
+        # is still open.
+        if (
+            previous_was_bullet
+            and not has_header_separator
+            and not dates
+            and not _project_url(line)
+            and not previous_bullet_closed
+            and not next_is_bullet
+        ):
+            starts_new = False
+
+        if starts_new:
+            current = start_entry(line)
+            entries.append(current)
+            previous_was_bullet = False
+            continue
+
+        if current is not None and current["bullets"]:
+            current["bullets"][-1] = (
+                current["bullets"][-1].rstrip() + " " + line.strip()
+            ).strip()
+        previous_was_bullet = False
+
+    return entries
 
 
 def _parse_skills(block: str, full_text: str) -> list[str]:

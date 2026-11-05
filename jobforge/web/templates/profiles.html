@@ -59,6 +59,10 @@
 {% if profile.projects %}
 <section class="panel">
   <div class="panel-head"><h2>Project bank</h2><span class="muted">{{ profile.projects|length }} projects · the three most JD-relevant render per resume</span></div>
+  <form method="post" action="/profiles/reparse" class="inline" onsubmit="return confirm('Reparse projects and project facts from this profile’s resume? Other profile fields stay unchanged.')">
+    <button class="ghost">Reparse projects from resume</button>
+    <span class="muted">Mode: {{ cfg.resume_import.project_mode }} · change in <a href="/settings">Settings</a></span>
+  </form>
   {% for p in profile.projects %}
     <div class="entry">
       <strong>{{ p.title or p.name }}</strong>

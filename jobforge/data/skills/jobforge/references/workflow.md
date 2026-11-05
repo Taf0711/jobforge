@@ -93,3 +93,26 @@ profile-scoped and survives new host sessions that use the same JobForge profile
 `jobforge_dashboard` returns the URL; `jobforge_open_dashboard` starts the local
 dashboard if needed and asks the OS browser to open it. Report the actual URL and
 whether it started. Do not automate the approval page.
+
+## Scan, score, and queue
+
+Use these only when `jobforge_status` shows the matching capability/scope:
+
+1. `jobforge_scan` with configured source names only; never pass a URL.
+2. `jobforge_score` for `unscored`, `all`, explicit `job_ids`, or `top`.
+3. `jobforge_build_queue` with a limit of 1–10. It cannot lower the user's
+   match floor and refuses a queue containing another profile's items.
+
+Scan and score are direct writes; they do not submit. Report the returned
+counts/errors and then search or explain the resulting fits.
+
+## Submission request
+
+`jobforge_request_submission` is a request, not a submission. It creates a
+pending one-use operation and returns `approval_path` plus risk status. The
+human approves the exact operation in the JobForge dashboard. Approval still
+requires the existing `unattended_submit` risk consent, quality gate, daily cap,
+resume artifact, and a captcha/2FA/account-wall-free path. Poll
+`jobforge_get_operation`; claim a submission only when `state` is `succeeded`
+and `result.submitted` is true. Never approve, enable risk, or retry for the
+user.
