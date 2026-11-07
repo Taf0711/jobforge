@@ -56,8 +56,8 @@ jobforge serve              # server only, no browser
 
 ```bash
 uv build
-# dist/jobforge-0.6.3-py3-none-any.whl
-# dist/jobforge-0.6.3.tar.gz
+# dist/jobforge-0.6.4-py3-none-any.whl
+# dist/jobforge-0.6.4.tar.gz
 ```
 
 The wheel packages:
@@ -155,7 +155,7 @@ within two days or it expires.
 
 The npm installer and the Python package must carry the same version. The
 installer pins its default runtime spec to `git+...@v${VERSION}`, so
-`jobforge@0.6.3` installs the `v0.6.3` Python tag rather than floating on
+`jobforge@0.6.4` installs the `v0.6.4` Python tag rather than floating on
 `main`.
 
 `installer/package.json` and `pyproject.toml` versions must both equal the tag

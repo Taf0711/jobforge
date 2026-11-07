@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.4 — known-ATS board selection and full Lever descriptions (2026-11-07)
+
+- `jobforge_scan` now accepts explicit board selectors for the implemented
+  public ATS adapters, for example `lever:palantir`, `greenhouse:affirm`, or
+  `ashby:replit`. This is bounded to known ATS board APIs; arbitrary URLs are
+  still rejected. Source-name scans continue to use only configured boards.
+- Lever ingestion now merges `descriptionPlain`, `lists` sections, and
+  `additionalPlain` into the stored description. Previously only the intro was
+  kept, so real requirements looked like thin/lead-only stubs and deep scores
+  collapsed.
+
 ## 0.6.3 — installer skill backups outside the skills root (2026-11-06)
 
 - `jobforge install apply` no longer writes the previous skill to

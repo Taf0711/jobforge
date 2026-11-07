@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -54,12 +55,59 @@ def configured_boards(config: Config, name: str) -> list[str]:
     return [str(b) for b in boards if str(b).strip()]
 
 
+BOARD_SELECTOR = re.compile(
+    r"^(greenhouse|lever|ashby|workable|smartrecruiters):"
+    r"([A-Za-z0-9][A-Za-z0-9._-]{0,100})$",
+    re.IGNORECASE,
+)
+
+
+def parse_board_selector(value: str) -> tuple[str, str] | None:
+    """Parse an explicit known-ATS board selector.
+
+    This is deliberately narrower than arbitrary URL ingestion: it can only
+    name a board slug on an ATS adapter JobForge already implements.
+    """
+    match = BOARD_SELECTOR.fullmatch(value.strip())
+    if not match:
+        return None
+    return match.group(1).lower(), match.group(2)
+
+
+def _fetch_board(
+    report: FetchReport, name: str, board: str
+) -> None:
+    if name not in SOURCES:
+        report.errors.append(f"Unknown source: {name}")
+        return
+    if name in SINGLETON_SOURCES:
+        report.errors.append(f"Source '{name}' does not take a board selector")
+        return
+    try:
+        jobs = SOURCES[name].fetch(board)
+        report.jobs.extend(jobs)
+        report.per_source[f"{name}:{board}"] = (
+            report.per_source.get(f"{name}:{board}", 0) + len(jobs)
+        )
+    except Exception as exc:  # one bad board should not abort the scan
+        report.errors.append(f"{name}/{board}: {exc}")
+
+
 def fetch_configured(config: Config, only: list[str] | None = None) -> FetchReport:
     report = FetchReport()
     if isinstance(only, str):
         only = [only]
-    names = only or list(SOURCES)
-    for name in names:
+    selectors = list(dict.fromkeys(str(item).strip() for item in (only or []) if str(item).strip()))
+    plain: list[str] = []
+    boards: list[tuple[str, str]] = []
+    for selector in selectors:
+        parsed = parse_board_selector(selector)
+        if parsed is None:
+            plain.append(selector)
+        else:
+            boards.append(parsed)
+
+    for name in (plain or ([] if selectors else list(SOURCES))):
         if name not in SOURCES:
             report.errors.append(f"Unknown source: {name}")
             continue
@@ -81,6 +129,9 @@ def fetch_configured(config: Config, only: list[str] | None = None) -> FetchRepo
                 report.per_source[name] = report.per_source.get(name, 0) + len(jobs)
             except Exception as exc:  # one bad board should not abort the scan
                 report.errors.append(f"{name}/{board}: {exc}")
+
+    for name, board in boards:
+        _fetch_board(report, name, board)
     return report
 
 

@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import Job
-from .base import JobSource, company_from_board, http_get_json, is_remote, iso_from_epoch_ms, parse_salary
+from .base import (
+    JobSource,
+    company_from_board,
+    html_to_text,
+    http_get_json,
+    is_remote,
+    iso_from_epoch_ms,
+    parse_salary,
+)
 
 
 class LeverSource(JobSource):
@@ -18,7 +26,27 @@ class LeverSource(JobSource):
         for item in data:
             categories = item.get("categories") or {}
             location = categories.get("location") or item.get("country") or ""
-            description = item.get("descriptionPlain") or item.get("description") or ""
+            # Lever splits a posting across description, lists, and additional.
+            # Reading only descriptionPlain drops the requirements section and
+            # makes real postings look like thin/lead-only stubs.
+            parts: list[str] = []
+            intro = item.get("descriptionPlain") or html_to_text(item.get("description") or "")
+            if intro:
+                parts.append(str(intro))
+            for section in item.get("lists") or []:
+                if not isinstance(section, dict):
+                    continue
+                heading = str(section.get("text") or "").strip()
+                if heading:
+                    parts.append(heading)
+                content = section.get("content") or ""
+                content_text = html_to_text(content) if content else ""
+                if content_text:
+                    parts.append(content_text)
+            additional = item.get("additionalPlain") or html_to_text(item.get("additional") or "")
+            if additional:
+                parts.append(str(additional))
+            description = "\n\n".join(part.strip() for part in parts if part.strip())
             salary = item.get("salaryRange") or {}
             smin = salary.get("min")
             smax = salary.get("max")

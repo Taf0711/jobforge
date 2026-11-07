@@ -256,7 +256,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
         },
     },
     "jobforge_scan": {
-        "description": "Fetch configured public job sources and store/quick-score jobs for the bound profile. Write-class but bounded to the configured source registry; no arbitrary URLs. Does not deep-score or submit.",
+        "description": "Fetch configured public job sources, or explicit known-ATS board selectors such as greenhouse:affirm, lever:palantir, or ashby:replit, and store/quick-score jobs for the bound profile. Write-class but bounded to known public ATS adapters; no arbitrary URLs. Does not deep-score or submit.",
         "scope": "scan:run",
         "required_scopes": ["scan:run"],
         "read_only": False,

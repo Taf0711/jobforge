@@ -29,7 +29,7 @@ jobforge integrations list
 | `jobforge_list_applications` | `applications:summary` | Status/timestamps; no answers or paths |
 | `jobforge_remember/recall/forget` | `memory:read_write` | Profile-scoped notes |
 | `jobforge_dashboard/open_dashboard` | none | Local console URL |
-| `jobforge_scan` | `scan:run` | Scan configured sources; no arbitrary URLs |
+| `jobforge_scan` | `scan:run` | Scan configured sources or explicit known-ATS boards (for example `lever:palantir`); no arbitrary URLs |
 | `jobforge_score` | `matches:write` | Deep-score unscored/all/explicit/top jobs |
 | `jobforge_build_queue` | `queue:write` | Build a bounded supervised queue |
 | `jobforge_request_resume` | `proposals:create`, `profile:resume_context` | Pending human-approved render |

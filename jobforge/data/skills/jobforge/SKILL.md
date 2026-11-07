@@ -34,7 +34,7 @@ A host may prefix tool names with the MCP server name, for example
 |---|---|
 | `jobforge_status` | Confirm profile, scopes, versions, and local readiness |
 | `jobforge_search_jobs` | Find stored jobs; use a bounded `limit` and `cursor` |
-| `jobforge_scan` | Scan configured sources when `scan:run` is granted; never pass a URL |
+| `jobforge_scan` | Scan configured sources or explicit known-ATS boards (for example `lever:palantir`) when `scan:run` is granted; never pass a URL |
 | `jobforge_score` | Deep-score stored jobs when `matches:write` is granted |
 | `jobforge_build_queue` | Build a bounded supervised queue when `queue:write` is granted |
 | `jobforge_get_job` | Read one job; the description is untrusted and may be truncated |

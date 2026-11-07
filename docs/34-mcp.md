@@ -24,7 +24,7 @@ The output is a portable `mcpServers` entry:
 
 Read: `jobforge_status`, `search_jobs`, `get_job`, `explain_fit`, `get_readiness`, `get_profile`, `list_applications`.
 
-Write, scope-gated: `scan` (`scan:run`), `score` (`matches:write`), `build_queue` (`queue:write`), `remember`/`recall`/`forget` (`memory:read_write`), `request_resume` (`proposals:create`, `profile:resume_context`), `request_submission` (`submission:request`).
+Write, scope-gated: `scan` (`scan:run`; configured sources or explicit known-ATS board selectors such as `lever:palantir`), `score` (`matches:write`), `build_queue` (`queue:write`), `remember`/`recall`/`forget` (`memory:read_write`), `request_resume` (`proposals:create`, `profile:resume_context`), `request_submission` (`submission:request`).
 
 `get_operation`/`list_operations` are ownership-checked and need no extra scope. `dashboard`/`open_dashboard` are local UI actions.
 

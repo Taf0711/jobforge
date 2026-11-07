@@ -23,7 +23,7 @@ from ..sources.greenhouse import GreenhouseSource
 from ..sources.hn import HNSource
 from ..sources.lever import LeverSource
 from ..sources.nyc import NYCOpenDataSource
-from ..sources.registry import FetchReport
+from ..sources.registry import FetchReport, _fetch_board, parse_board_selector
 from ..sources.usajobs import USAJobsSource
 from ..sources.workable import WorkableSource
 from ..sources.workday import WorkdaySource
@@ -119,7 +119,19 @@ def fetch_registry(config: Config, only: Iterable[str] | None = None) -> FetchRe
         return report
     if isinstance(only, str):
         only = [only]
-    selected = {str(item).strip().lower() for item in (only or []) if str(item).strip()}
+    selectors = [str(item).strip() for item in (only or []) if str(item).strip()]
+    plain = {item.lower() for item in selectors if ":" not in item}
+    board_selectors: list[tuple[str, str]] = []
+    for item in selectors:
+        if ":" not in item:
+            continue
+        parsed = parse_board_selector(item)
+        if parsed is not None:
+            board_selectors.append(parsed)
+        else:
+            report.errors.append(f"Unknown source: {item}")
+    matched_boards: set[tuple[str, str]] = set()
+
     for entry in load_registry(path):
         if entry.get("enabled") is False:
             continue
@@ -130,8 +142,22 @@ def fetch_registry(config: Config, only: Iterable[str] | None = None) -> FetchRe
             aliases.add("github_jobs")
         if kind == "github_pipe":
             aliases.add("github_pipe")
-        if selected and not (aliases & selected):
+        if plain and not (aliases & plain):
             continue
+        if board_selectors:
+            try:
+                _, board, _, _ = _source_for(entry)
+            except SourceError:
+                board = ""
+            matches = [
+                (source, board_value)
+                for source, board_value in board_selectors
+                if (kind == source or name.lower() == source)
+                and board and board_value.lower() == board.lower()
+            ]
+            if not matches and not plain:
+                continue
+            matched_boards.update(matches)
         try:
             source, board, kwargs, competition = _source_for(entry)
             jobs = source.fetch(board, **kwargs)
@@ -147,6 +173,13 @@ def fetch_registry(config: Config, only: Iterable[str] | None = None) -> FetchRe
             job.competition_profile = competition
         report.jobs.extend(jobs)
         report.per_source[name or kind] = report.per_source.get(name or kind, 0) + len(jobs)
+
+    # A board selector is allowed even when the flat registry does not contain
+    # that board; fetch it directly from the known ATS adapter.
+    for source, board in board_selectors:
+        if (source, board) in matched_boards:
+            continue
+        _fetch_board(report, source, board)
     return report
 
 
