@@ -25,7 +25,7 @@
   <div class="panel">
     <div class="panel-head"><h2>Import</h2></div>
     <p class="muted">Upload a PDF, DOCX, TXT, MD, YAML, or JSON profile. Parsing is heuristic; review the result before applying.</p>
-    <form method="post" action="/profiles/import" enctype="multipart/form-data" class="stack">
+    <form method="post" action="/profiles/import" enctype="multipart/form-data" class="stack" data-confirm="Import this file now? It will parse and merge or replace projects according to Settings → Resume imports.">
       <input type="file" name="file" accept=".pdf,.docx,.txt,.md,.yaml,.yml,.json" required>
       <button class="primary">Import profile</button>
     </form>
@@ -59,7 +59,7 @@
 {% if profile.projects %}
 <section class="panel">
   <div class="panel-head"><h2>Project bank</h2><span class="muted">{{ profile.projects|length }} projects · the three most JD-relevant render per resume</span></div>
-  <form method="post" action="/profiles/reparse" class="inline" onsubmit="return confirm('Reparse projects and project facts from this profile’s resume? Other profile fields stay unchanged.')">
+  <form method="post" action="/profiles/reparse" class="inline" data-confirm="Reparse projects and project facts from this profile's resume? Other profile fields stay unchanged.">
     <button class="ghost">Reparse projects from resume</button>
     <span class="muted">Mode: {{ cfg.resume_import.project_mode }} · change in <a href="/settings">Settings</a></span>
   </form>

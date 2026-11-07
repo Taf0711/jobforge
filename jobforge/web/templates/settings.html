@@ -5,8 +5,11 @@
   <div><p class="eyebrow">Configure</p><h1>Settings</h1></div>
 </section>
 
+<nav class="settings-nav" aria-label="Settings sections">
+  <a href="#search">Search</a><a href="#runtime">Runtime &amp; sources</a><a href="#features">Features</a><a href="#imports">Resume imports</a>
+</nav>
 <section class="grid-2">
-  <div class="panel">
+  <div class="panel" id="search">
     <div class="panel-head"><h2>Search preferences</h2></div>
     <form method="post" action="/settings" class="stack">
       <label>Target titles <span class="muted">(comma-separated, max 5)</span>
@@ -40,7 +43,7 @@
     </form>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="runtime">
     <div class="panel-head"><h2>Runtime</h2></div>
     <table class="compact"><tbody>
       <tr><td>Database</td><td><code>{{ cfg.db_path }}</code></td></tr>
@@ -68,7 +71,7 @@
   </div>
 </section>
 
-<section class="panel">
+<section class="panel" id="features">
   <div class="panel-head"><h2>Feature flags</h2><span class="pill">local config</span></div>
   <p class="muted">Toggle locally supported features. Environment variables override these values at startup.</p>
   <form method="post" action="/settings/features" class="stack">
@@ -82,7 +85,7 @@
   <p class="setup-note">Env overrides: <code>JOBFORGE_FEATURE_SETUP_WIZARD</code>, <code>JOBFORGE_FEATURE_GITHUB_CONNECTIONS</code>, <code>JOBFORGE_FEATURE_SCORING_V2</code>, <code>JOBFORGE_FEATURE_AGENT</code>, <code>JOBFORGE_FEATURE_AGENT_INTEGRATIONS</code>. Changing the scoring mode does not rewrite existing matches; run <strong>Score</strong> to apply it.</p>
 </section>
 
-<section class="panel">
+<section class="panel" id="imports">
   <div class="panel-head"><h2>Resume imports</h2><span class="pill">local config</span></div>
   <p class="muted">Choose what happens when a resume is uploaded or reparsed. This only affects projects and project facts; experience, education, skills, preferences, and applications are untouched.</p>
   <form method="post" action="/settings/resume" class="stack">

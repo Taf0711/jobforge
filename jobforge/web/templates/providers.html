@@ -34,7 +34,8 @@
   </div>
 </section>
 
-<section class="provider-grid">
+<div class="filter-bar"><div class="filter-field search"><label for="provider-search">Find a provider</label><input id="provider-search" type="search" placeholder="OpenAI, Claude, Ollama, OpenRouter…" autocomplete="off"></div><span class="muted-small" id="provider-count">14 providers</span></div>
+<section class="provider-grid" id="provider-grid">
   {% for card in cards %}
   <article class="panel provider-card {{ 'provider-active' if card.active else '' }}">
     <div class="panel-head">

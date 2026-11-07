@@ -21,6 +21,7 @@ from ..agent.providers import (
 )
 from ..agent.runtime import AgentError, AgentRuntime
 from ..config import Config
+from ..version import app_version
 
 WEB_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
@@ -109,6 +110,8 @@ def create_agent_router(config: Config) -> APIRouter:
                 "profile": profile,
                 "prefs": prefs,
                 "cfg": config,
+                "data_dir": str(config.data_dir),
+                "app_version": app_version(),
                 "features": config.features,
                 "msg": request.query_params.get("msg", ""),
                 "threads": threads,

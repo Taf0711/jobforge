@@ -1380,6 +1380,14 @@ def list_agent_instances(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [_agent_instance_from_row(row) for row in rows]
 
 
+def touch_agent_instance(conn: sqlite3.Connection, instance_id: str) -> None:
+    conn.execute(
+        "UPDATE agent_instances SET last_seen_at=? WHERE id=?",
+        (utcnow(), instance_id),
+    )
+    conn.commit()
+
+
 def _agent_connection_from_row(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
     data["scopes"] = json.loads(data.pop("scopes_json") or "[]")

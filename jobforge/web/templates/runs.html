@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Runs · JobForge{% endblock %}
 {% block content %}
-<section class="page-head"><div><p class="eyebrow">Log</p><h1>Runs</h1></div></section>
+<section class="page-head"><div><h1>Runs</h1></div></section>
 <section class="panel">
   {% if runs %}
   <table>
@@ -14,7 +14,7 @@
         <td class="muted">{{ r.started_at[:16] }}</td>
         <td class="muted">{{ r.finished_at[:16] if r.finished_at else '—' }}</td>
         <td><span class="pill">{{ r.status }}</span></td>
-        <td class="muted">{{ r.stats|short(160) }}</td>
+        <td class="muted">{% if r.stats %}{% for key, value in r.stats.items() %}{{ key }}: {{ value }}{% if not loop.last %} · {% endif %}{% endfor %}{% else %}—{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

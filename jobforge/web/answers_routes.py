@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import db, services
+from ..version import app_version
 from ..automation.drafter import (
     DraftError,
     approve_draft,
@@ -133,6 +134,9 @@ def create_answers_router(config: Config) -> APIRouter:
             context={
                 "request": request,
                 "profile": profile,
+                "cfg": config,
+                "data_dir": str(config.data_dir),
+                "app_version": app_version(),
                 "msg": request.query_params.get("msg", ""),
                 "overrides": dict(sorted(overrides.items())),
                 "drafts": list_drafts(config),

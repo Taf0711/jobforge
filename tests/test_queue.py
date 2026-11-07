@@ -504,3 +504,31 @@ def test_mutations_reload_under_the_shared_lock(tmp_path: Path):
     assert [item.job_id for item in stale.list_items()] == [job_id]
     stale.mark_skipped(job_id, note="reloaded")
     assert Queue(path).list_items("skipped")[0].note == "reloaded"
+
+
+def test_skipped_job_can_reenter_without_duplicate(tmp_path: Path):
+    _, conn, profile, prefs = _seed(tmp_path)
+    job_id = _add_job(conn, profile.id or 0, "Acme", "Engineer", 90)
+    queue = Queue(tmp_path / "queue.json")
+    queue.build(conn, profile, prefs, limit=10)
+    queue.mark_skipped(job_id, note="not now")
+
+    added = queue.build(conn, profile, prefs, limit=10)
+
+    assert [item.job_id for item in added] == [job_id]
+    assert [item.status for item in added] == ["pending"]
+    assert len(queue.list_items()) == 1
+
+
+def test_skipped_company_slot_is_available_for_a_better_job(tmp_path: Path):
+    _, conn, profile, prefs = _seed(tmp_path)
+    old_job = _add_job(conn, profile.id or 0, "Acme", "Engineer", 90)
+    queue = Queue(tmp_path / "queue.json")
+    queue.build(conn, profile, prefs, limit=10)
+    queue.mark_skipped(old_job)
+
+    better = _add_job(conn, profile.id or 0, "Acme", "Senior Engineer", 95)
+    added = queue.build(conn, profile, prefs, limit=10)
+
+    assert [item.job_id for item in added] == [better]
+    assert queue.list_items("skipped")[0].job_id == old_job

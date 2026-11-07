@@ -27,6 +27,7 @@ from ..agent.providers import (
     remember_provider_connection,
 )
 from ..config import Config
+from ..version import app_version
 from ..locking import action_lock
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -80,6 +81,8 @@ def create_provider_router(config: Config) -> APIRouter:
             "profile": profile,
             "prefs": prefs,
             "cfg": config,
+            "data_dir": str(config.data_dir),
+            "app_version": app_version(),
             "features": config.features,
             "msg": request.query_params.get("msg", ""),
             "cards": cards,

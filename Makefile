@@ -1,7 +1,7 @@
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 
-.PHONY: help bootstrap install setup app doctor serve test scan score tailor apply audit eval e2e smoke lock clean
+.PHONY: help bootstrap install setup app doctor serve test scan score tailor apply audit eval e2e smoke ui-smoke lock clean
 
 help:
 	@echo "JobForge"
@@ -78,6 +78,9 @@ e2e:
 
 smoke:
 	$(PY) scripts/smoke_live_ats.py --json
+
+ui-smoke:
+	$(PY) scripts/ui_smoke.py --json
 
 lock:
 	uv pip compile requirements.txt -o requirements.lock

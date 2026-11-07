@@ -2,53 +2,103 @@
 {% block title %}Jobs · JobForge{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><p class="eyebrow">Discover</p><h1>Jobs</h1></div>
-  <form method="post" action="/scan/run"><button class="primary">Scan sources</button></form>
+  <div>
+    <h1>Jobs</h1>
+    <p class="muted">Fit first. Scan is a cheap discovery signal; fit is the scored match after a real JD is available.</p>
+  </div>
+  <form method="post" action="/scan/run"><button class="button primary">Scan sources</button></form>
 </section>
 
-<form class="filters" method="get" action="/jobs">
-  <input type="search" name="q" value="{{ q }}" placeholder="Search title, company, description">
-  <input type="number" name="min_scan" value="{{ min_scan if min_scan is not none else '' }}" min="0" max="100" placeholder="Min scan">
-  <input type="number" name="min_score" value="{{ min_score if min_score is not none else '' }}" min="0" max="100" placeholder="Min fit">
-  <select name="sort">
-    {% for option in ['scan', 'fit', 'recent'] %}
-      <option value="{{ option }}" {{ 'selected' if sort == option else '' }}>Sort: {{ option }}</option>
-    {% endfor %}
-  </select>
-  <select name="source">
-    <option value="">All sources</option>
-    {% for s in ['greenhouse','lever','ashby','workable','smartrecruiters','github_jobs','direct','workday'] %}
-      <option value="{{ s }}" {{ 'selected' if source == s else '' }}>{{ s }}</option>
-    {% endfor %}
-  </select>
-  <button>Filter</button>
-  <a class="link" href="/jobs">Reset</a>
+<form class="filter-bar" method="get" action="/jobs" aria-label="Job filters">
+  <div class="filter-field search">
+    <label for="jobs-q">Search</label>
+    <input id="jobs-q" type="search" name="q" value="{{ q }}" placeholder="Title, company, or description">
+  </div>
+  <div class="filter-field">
+    <label for="jobs-min-fit">Minimum fit</label>
+    <input id="jobs-min-fit" type="number" name="min_score" value="{{ min_score if min_score is not none else '' }}" min="0" max="100" inputmode="numeric" placeholder="Any">
+  </div>
+  <div class="filter-field">
+    <label for="jobs-min-scan">Minimum scan</label>
+    <input id="jobs-min-scan" type="number" name="min_scan" value="{{ min_scan if min_scan is not none else '' }}" min="0" max="100" inputmode="numeric" placeholder="Any">
+  </div>
+  <div class="filter-field">
+    <label for="jobs-sort">Sort</label>
+    <select id="jobs-sort" name="sort">
+      {% for option, label in [('fit', 'Fit'), ('scan', 'Scan'), ('recent', 'Newest')] %}
+      <option value="{{ option }}" {{ 'selected' if sort == option else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-field">
+    <label for="jobs-source">Source</label>
+    <select id="jobs-source" name="source">
+      <option value="">All sources</option>
+      {% for value, label in source_labels.items() %}
+      <option value="{{ value }}" {{ 'selected' if source == value else '' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-actions">
+    <button class="primary">Apply</button>
+    <a class="link" href="/jobs">Reset</a>
+  </div>
 </form>
 
 <section class="panel">
-  <div class="panel-head"><h2>{{ jobs|length }} roles</h2><span class="muted">Sorted by {{ sort }}</span></div>
+  <div class="section-line">
+    <h2>{{ total }} role{{ '' if total == 1 else 's' }}</h2>
+    <span class="muted-small">{% if total %}Showing {{ (page - 1) * page_size + 1 }}–{{ [page * page_size, total]|min }} · sorted by {{ {'fit':'fit','scan':'scan','recent':'newest'}.get(sort, sort) }}{% else %}No matches{% endif %}</span>
+  </div>
   {% if jobs %}
-  <table>
-    <thead><tr><th>Scan</th><th>Fit</th><th>Competition</th><th>Company</th><th>Role</th><th>Location</th><th>Salary</th><th>Source</th><th>Status</th><th></th></tr></thead>
-    <tbody>
-    {% for job in jobs %}
+  <div class="table-wrap">
+    <table class="table-cards jobs-table">
+      <thead><tr><th>Fit</th><th>Scan</th><th>Role</th><th>Company</th><th>Location</th><th>Salary</th><th>Source</th><th>Signal</th><th></th></tr></thead>
+      <tbody>
+      {% for job in jobs %}
       <tr>
-        <td>{% if job.scan %}<span class="score {{ 'strong' if job.scan.score >= 75 else ('ok' if job.scan.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.scan.score) }}</span> <span class="muted">{{ '%.0f'|format(job.scan.confidence) }}%</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if job.score is not none %}<span class="score {{ 'strong' if job.score >= 75 else ('ok' if job.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.score) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td class="muted">{{ job.scan.competition_profile if job.scan else '—' }}</td>
-        <td>{{ job.company }}</td>
-        <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
-        <td>{{ job.location or ('Remote' if job.remote else '') }}</td>
-        <td>{% if job.salary_min %}{{ job.salary_min|money }}{% if job.salary_max %} – {{ job.salary_max|money }}{% endif %}{% endif %}</td>
-        <td class="muted">{{ job.source }}</td>
-        <td>{% if job.application_status %}<span class="pill">{{ job.application_status }}</span>{% elif job.saved %}<span class="pill">saved</span>{% endif %}</td>
-        <td><a class="link" href="/jobs/{{ job.id }}">Open</a></td>
+        <td data-label="Fit">
+          {% if job.score is not none %}
+          <span class="score {{ 'zero' if job.score == 0 else ('strong' if job.score >= 75 else ('ok' if job.score >= 55 else 'weak')) }}"{% if job.score == 0 %} title="Scored 0 — insufficient verified evidence"{% endif %}>{{ '%.0f'|format(job.score) }}</span>
+          {% else %}<span class="score na">—</span>{% endif %}
+        </td>
+        <td data-label="Scan">
+          {% if job.scan %}<span class="score {{ 'strong' if job.scan.score >= 75 else ('ok' if job.scan.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.scan.score) }}</span><br><span class="muted-small">{{ '%.0f'|format(job.scan.confidence) }}%</span>{% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td data-label="Role">
+          <a class="role-title" href="/jobs/{{ job.id }}">{{ job.title }}</a>
+          {% if job.application_status %}<span class="pill">{{ job.application_status }}</span>{% endif %}
+        </td>
+        <td data-label="Company">{{ job.company }}</td>
+        <td data-label="Location" class="muted">{{ job.location or ('Remote' if job.remote else '—') }}{% if job.posted_at %}<br><span class="muted-small">{{ job.posted_at[:10] }}</span>{% endif %}</td>
+        <td data-label="Salary">{% if job.salary_min %}{{ job.salary_min|money }}{% if job.salary_max %}–{{ job.salary_max|money }}{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td data-label="Source"><span class="source-label">{{ source_labels.get(job.source, job.source) }}</span></td>
+        <td data-label="Signal"><span class="tech-label">{{ competition_labels.get(job.scan.competition_profile if job.scan else '', '—') }}</span></td>
+        <td data-label="">
+          <div class="queue-actions">
+            <a class="button tiny" href="/jobs/{{ job.id }}">Open</a>
+            <form method="post" action="/jobs/{{ job.id }}/save" class="inline"><button class="tiny ghost">{{ 'Saved' if job.saved else 'Save' }}</button></form>
+            <form method="post" action="/jobs/{{ job.id }}/hide" class="inline" data-confirm="Hide this job from the feed?"><button class="tiny ghost">Hide</button></form>
+          </div>
+        </td>
       </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    <span>Page {{ page }} of {{ pages }}</span>
+    <div class="actions">
+      {% if page > 1 %}<a class="button" href="{{ request.url.include_query_params(page=page-1) }}">Previous</a>{% else %}<span class="button disabled">Previous</span>{% endif %}
+      {% if page < pages %}<a class="button" href="{{ request.url.include_query_params(page=page+1) }}">Next</a>{% else %}<span class="button disabled">Next</span>{% endif %}
+    </div>
+  </div>
   {% else %}
-  <p class="empty">No jobs match. Run a scan or loosen the filters.</p>
+  <div class="empty-action">
+    <strong>No jobs match these filters.</strong>
+    <p>Clear the filters, or run a scan to bring in configured boards and explicit known-ATS boards.</p>
+    <a class="button" href="/jobs">Clear filters</a>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

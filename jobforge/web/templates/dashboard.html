@@ -1,164 +1,169 @@
 {% extends "base.html" %}
-{% block title %}Console · JobForge{% endblock %}
+{% block title %}Today · JobForge{% endblock %}
 {% block content %}
-<section class="hero">
+<section class="page-head">
   <div>
-    <p class="eyebrow">Local console</p>
-    <h1>Your job search, inside your agent.</h1>
-    <p class="muted">JobForge is the local workbench behind Claude Code, Pi, Hermes, or any MCP host. Review approvals and artifacts here. The agent never submits.</p>
+    <h1>Today</h1>
+    <p class="muted">Your next decisions, the live pipeline, and what the connected agents are doing.</p>
   </div>
   <div class="actions">
-    <a class="button primary" href="/agents">Add or manage agents</a>
-    {% if pending_operations %}
-    <a class="button" href="/operations">Review {{ pending_operations|length }} approval{{ '' if pending_operations|length == 1 else 's' }}</a>
-    {% endif %}
+    <form method="post" action="/scan/run"><button class="button">Scan sources</button></form>
+    <form method="post" action="/score/run"><button class="button">Rescore</button></form>
   </div>
 </section>
 
-<section class="stats">
-  <div class="stat"><span>{{ stats.jobs }}</span><small>jobs tracked</small></div>
-  <div class="stat"><span>{{ stats.applications_total }}</span><small>applications</small></div>
-  <div class="stat"><span>{{ pending_operations|length }}</span><small>pending approvals</small></div>
-  <div class="stat"><span>{{ agent_connections|length }}</span><small>connected agents</small></div>
+<section class="stat-strip" aria-label="Pipeline summary">
+  <div class="stat-cell"><strong>{{ stats.jobs }}</strong><span>jobs tracked</span></div>
+  <div class="stat-cell"><strong>{{ stats.applications_total }}</strong><span>applications</span></div>
+  <div class="stat-cell"><strong>{{ queue_summary.pending }}</strong><span>queue pending</span></div>
+  <div class="stat-cell"><strong>{{ queue_summary.prepared }}</strong><span>queue prepared</span></div>
+  <div class="stat-cell"><strong>{{ pending_operations|length }}</strong><span>approvals</span></div>
 </section>
 
-<section class="console-grid">
-  <div class="panel">
-    <div class="panel-head"><h2>Connected agents</h2><a class="link" href="/agents">Manage</a></div>
-    {% if agent_connections %}
-    <table>
-      <tbody>
-      {% for connection in agent_connections %}
+<div class="dashboard-grid">
+  <div>
+    <section class="panel">
+      <div class="section-line"><h2>Needs you</h2><span class="muted-small">The shortest path to a useful next step</span></div>
+      <div class="action-list">
+        {% for operation in pending_operations[:3] %}
+        <div class="action-row">
+          <div class="action-copy">
+            <strong>{{ 'Approve a resume render' if operation.action == 'render_resume' else 'Approve a submission request' }}</strong>
+            <span>{{ operation.job_company or 'Job' }}{% if operation.job_title %} · {{ operation.job_title }}{% endif %}{% if operation.connection_label %} · requested by {{ operation.connection_label }}{% endif %}</span>
+          </div>
+          <a class="button primary" href="/operations/{{ operation.id }}">Review</a>
+        </div>
+        {% endfor %}
+        {% if next_queue_item %}
+        <div class="action-row">
+          <div class="action-copy">
+            <strong>Queue: {{ next_queue_item.title }}</strong>
+            <span>{{ next_queue_item.company }} · {{ '%.1f'|format(next_queue_item.score) }} fit · {{ next_queue_item.status }}</span>
+          </div>
+          <a class="button" href="/queue">Open queue</a>
+        </div>
+        {% endif %}
+        {% for run in failed_runs %}
+        <div class="action-row">
+          <div class="action-copy">
+            <strong>Last {{ run.kind }} run failed</strong>
+            <span>{{ run.started_at[:16] }} · open Runs for the error detail</span>
+          </div>
+          <a class="button" href="/runs">Inspect</a>
+        </div>
+        {% endfor %}
+        {% if setup_incomplete %}
+        <div class="action-row">
+          <div class="action-copy">
+            <strong>Finish setup</strong>
+            <span>Choose sources, targets, and the profile the agents use.</span>
+          </div>
+          <a class="button" href="/setup">Finish</a>
+        </div>
+        {% endif %}
+        {% if not pending_operations and not next_queue_item and not failed_runs and not setup_incomplete %}
+        <div class="empty-action">
+          <strong>Nothing is blocked.</strong>
+          <p>Run a scan, then score the best leads. The queue will take the roles that clear your match floor.</p>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-line"><h2>Top fit</h2><a href="/jobs?sort=fit">All jobs</a></div>
+      {% if jobs %}
+      <table class="top-fit-table table-cards">
+        <thead><tr><th>Fit</th><th>Role</th><th>Company</th><th>Location</th><th>Warm</th><th></th></tr></thead>
+        <tbody>
+        {% for job in jobs %}
         <tr>
-          <td><strong>{{ connection.label or connection.client }}</strong><br><span class="muted">{{ connection.client }}</span></td>
-          <td><span class="pill {{ '' if connection.enabled else 'bad' }}">{{ 'enabled' if connection.enabled else 'disabled' }}</span></td>
-          <td class="muted col-last-used">{{ connection.last_used_at[:16] if connection.last_used_at else 'never used' }}</td>
+          <td data-label="Fit"><span class="score {{ 'strong' if job.score >= 75 else ('ok' if job.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.score) if job.score is not none else '—' }}</span></td>
+          <td data-label="Role"><a class="role-title" href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
+          <td data-label="Company">{{ job.company }}</td>
+          <td data-label="Location" class="muted">{{ job.location or ('Remote' if job.remote else '—') }}</td>
+          <td data-label="Warm">{% if job.warm_channel and job.warm_channel != 'cold_only' %}<span class="pill">{{ job.warm_channel.replace('_', ' ') }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td data-label=""><a class="link" href="/jobs/{{ job.id }}">Open</a></td>
         </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="empty">No agent connected yet.</p>
-    <pre class="command">npx jobforge</pre>
-    {% endif %}
-  </div>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-action">
+        <strong>No scored roles yet.</strong>
+        <p>Run <em>Scan sources</em>, then <em>Rescore</em>. A role needs a full description before its fit is trustworthy.</p>
+      </div>
+      {% endif %}
+    </section>
 
-  <div class="panel">
-    <div class="panel-head"><h2>Pending approvals</h2><a class="link" href="/operations">All approvals</a></div>
-    {% if pending_operations %}
-    <table>
-      <tbody>
-      {% for operation in pending_operations[:4] %}
+    <section class="panel">
+      <div class="section-line"><h2>Lead feed</h2><a href="/jobs?source=github_jobs&min_score=0">Review {{ github_lead_count }}</a></div>
+      {% if github_lead_jobs %}
+      <table class="table-cards">
+        <thead><tr><th>Scan</th><th>Role</th><th>Company</th><th>Posted</th></tr></thead>
+        <tbody>
+        {% for job in github_lead_jobs %}
         <tr>
-          <td>
-            <a href="/operations/{{ operation.id }}">{{ operation.job_company or operation.action }}</a><br>
-            <span class="muted">{{ operation.job_title or operation.action }}</span>
-          </td>
-          <td class="muted">{{ operation.created_at[:16] }}</td>
+          <td data-label="Scan">{% if job.scan %}<span class="score {{ 'strong' if job.scan.score >= 75 else ('ok' if job.scan.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.scan.score) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td data-label="Role"><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
+          <td data-label="Company">{{ job.company }}</td>
+          <td data-label="Posted" class="muted">{{ job.posted_at[:10] if job.posted_at else '—' }}</td>
         </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% if pending_operations|length > 4 %}<p class="muted">{{ pending_operations|length - 4 }} more waiting.</p>{% endif %}
-    {% else %}
-    <p class="empty">Nothing waiting for approval.</p>
-    <p class="muted">When an agent requests a resume, it appears here.</p>
-    {% endif %}
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head"><h2>Quick actions</h2></div>
-  <div class="quick-actions">
-    <a class="button primary" href="/agents">Install / repair agent</a>
-    <a class="button" href="/operations">Review approvals</a>
-    <a class="button" href="/jobs">Browse jobs</a>
-    <a class="button" href="/applications">Tracker</a>
-    <form method="post" action="/scan/run"><button>Run scan</button></form>
-    <form method="post" action="/score/run"><button>Rescore</button></form>
-  </div>
-</section>
-
-<section class="panel">
-  <div class="panel-head">
-    <h2>Best matches</h2>
-    <a class="link" href="/jobs">All jobs</a>
-  </div>
-  {% if jobs %}
-  <table>
-    <thead><tr><th>Scan</th><th>Fit</th><th>Company</th><th>Role</th><th class="col-location">Location</th><th class="col-salary">Salary</th><th class="col-warm">Warm</th><th></th></tr></thead>
-    <tbody>
-    {% for job in jobs %}
-      <tr>
-        <td>{% if job.scan %}<span class="score {{ 'strong' if job.scan.score >= 75 else ('ok' if job.scan.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.scan.score) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if job.score is not none %}<span class="score {{ 'strong' if job.score >= 75 else ('ok' if job.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.score) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{{ job.company }}</td>
-        <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
-        <td class="col-location">{{ job.location or ('Remote' if job.remote else '') }}</td>
-        <td class="col-salary">{% if job.salary_min %}{{ job.salary_min|money }}{% if job.salary_max %} – {{ job.salary_max|money }}{% endif %}{% endif %}</td>
-        <td class="col-warm">{% if job.warm_channel and job.warm_channel != 'cold_only' %}<span class="pill">{{ job.warm_channel.replace('_', ' ') }}</span>{% endif %}</td>
-        <td>{% if job.application_status %}<span class="pill">{{ job.application_status }}</span>{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="empty">No jobs yet. <a href="/setup">Finish setup</a> or add boards in Settings, then run a scan.</p>
-  {% endif %}
-</section>
-
-{% if github_lead_jobs %}
-<section class="panel">
-  <div class="panel-head">
-    <h2>Community GitHub leads</h2>
-    <a class="link" href="/jobs?source=github_jobs&min_score=0">Review all {{ github_lead_count }}</a>
-  </div>
-  <p class="muted">Discovery leads from public job-list repos. The README has no full JD, so these score below full ATS postings until you open the employer page.</p>
-  <table>
-    <tbody>
-    {% for job in github_lead_jobs %}
-      <tr>
-        <td>{% if job.scan %}<span class="score {{ 'strong' if job.scan.score >= 75 else ('ok' if job.scan.score >= 55 else 'weak') }}">{{ '%.0f'|format(job.scan.score) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{{ job.company }}</td>
-        <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td>
-        <td class="muted col-location">{{ job.location or ('Remote' if job.remote else '') }}</td>
-        <td class="muted col-date">{{ job.posted_at[:10] if job.posted_at else '' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</section>
-{% endif %}
-
-<section class="grid-2">
-  <div class="panel">
-    <div class="panel-head"><h2>Recent applications</h2><a class="link" href="/applications">Tracker</a></div>
-    {% if apps %}
-    <table>
-      <tbody>
-      {% for app in apps %}
-        <tr>
-          <td><a href="/jobs/{{ app.job_id }}">{{ app.company }} — {{ app.title }}</a></td>
-          <td><span class="pill">{{ app.status }}</span></td>
-          <td class="muted">{{ app.updated_at[:10] }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}<p class="empty">Nothing prepared yet.</p>{% endif %}
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted-small">Community job-list rows have no full JD; they are leads, not scored applications.</p>
+      {% else %}
+      <p class="empty">No community leads in the current feed.</p>
+      {% endif %}
+    </section>
   </div>
 
-  <div class="panel">
-    <div class="panel-head"><h2>Recent runs</h2><a class="link" href="/runs">All runs</a></div>
-    {% if runs %}
-    <table>
-      <tbody>
-      {% for run in runs %}
-        <tr><td>{{ run.kind }}</td><td><span class="pill">{{ run.status }}</span></td><td class="muted">{{ run.started_at[:16] }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}<p class="empty">No runs yet.</p>{% endif %}
-  </div>
-</section>
+  <aside>
+    <section class="panel">
+      <div class="section-line"><h2>Agents</h2><a href="/agents">Manage</a></div>
+      {% if agent_connections %}
+        {% for connection in agent_connections %}
+        <div class="action-row">
+          <div class="action-copy">
+            <div class="connection-line"><strong>{{ connection.label or connection.client }}</strong><span class="pill {{ '' if connection.enabled else 'bad' }}">{{ 'enabled' if connection.enabled else 'disabled' }}</span></div>
+            <span>{{ connection.client }} · {{ connection.last_seen_at[:16] if connection.last_seen_at else (connection.last_used_at[:16] if connection.last_used_at else 'no actions yet') }}</span>
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+      <div class="empty-action">
+        <strong>No agent connected.</strong>
+        <p>Install JobForge into your local agent with <code>npx jobforge</code>.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <div class="section-line"><h2>Recent activity</h2><a href="/runs">Runs</a></div>
+      {% if apps or runs %}
+      <ul class="activity-list">
+        {% for app in apps[:3] %}
+        <li><time>{{ app.updated_at[:10] }}</time><span><a href="/jobs/{{ app.job_id }}">{{ app.company }}</a> · {{ app.status }}</span></li>
+        {% endfor %}
+        {% for run in runs[:3] %}
+        <li><time>{{ run.started_at[11:16] }}</time><span>{{ run.kind }} · {{ run.status }}</span></li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No runs or applications yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <div class="section-line"><h2>Shortcuts</h2><a href="/jobs">Jobs</a></div>
+      <div class="quick-actions">
+        <a class="button" href="/queue">Queue</a>
+        <a class="button" href="/operations">Approvals</a>
+        <a class="button" href="/profiles">Profile</a>
+        <a class="button" href="/settings">Settings</a>
+      </div>
+    </section>
+  </aside>
+</div>
 {% endblock %}

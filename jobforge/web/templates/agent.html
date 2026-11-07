@@ -45,13 +45,21 @@
 
     {% if not selected %}
       <div class="agent-welcome">
+        {% if not provider_ready %}
+        <div class="empty-action">
+          <strong>Use your host agent instead</strong>
+          <p>The JobForge MCP server is available to Claude Code, Codex, Pi, Hermes, and OMP without a built-in model. Connect a model only if you want to chat inside this dashboard.</p>
+          <div class="actions"><a class="button primary" href="/agents">Open agent connections</a><a class="button" href="/providers">Connect a model</a></div>
+        </div>
+        {% else %}
         <p>The agent can answer from your local context and cite the facts it used.</p>
         <div class="suggestion-grid">
           {% for prompt in suggestions %}
-          <button class="suggestion" data-prompt="{{ prompt }}" {% if not provider_ready %}disabled{% endif %}>{{ prompt }}</button>
+          <button class="suggestion" data-prompt="{{ prompt }}">{{ prompt }}</button>
           {% endfor %}
         </div>
         <p class="muted">Start a conversation first. Suggestions fill the composer; they do not run automatically.</p>
+        {% endif %}
       </div>
     {% else %}
       <div id="agent-messages" class="agent-messages" data-thread-id="{{ selected.id }}" data-ask-surface data-ask-context="Agent answer · {{ selected.title|short(60) }}">

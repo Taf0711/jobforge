@@ -27,7 +27,7 @@ def _server_version() -> str:
     try:
         return version("jobforge")
     except PackageNotFoundError:
-        return "0.6.6"
+        return "0.7.0"
 
 
 SERVER_VERSION = _server_version()
@@ -185,11 +185,26 @@ TOOL_TITLES = {
 }
 
 
+def _heartbeat_instance(config_path: str | None, instance_id: str | None) -> None:
+    if not instance_id:
+        return
+    try:
+        config = load_config(config_path)
+        conn = db.connect(config.db_path)
+        try:
+            db.touch_agent_instance(conn, instance_id)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - presence is display-only
+        return
+
+
 def create_server(
     config_path: str | None,
     connection_id: str,
     instance_id: str | None = None,
 ) -> MCPServer:
+    _heartbeat_instance(config_path, instance_id)
     def annotations_for(name: str) -> ToolAnnotations:
         spec = TOOL_SPECS[name]
         return ToolAnnotations(

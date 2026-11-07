@@ -1,25 +1,47 @@
 {% extends "base.html" %}
+{% block title %}Approvals · JobForge{% endblock %}
 {% block content %}
+<section class="page-head">
+  <div>
+    <h1>Approvals</h1>
+    <p class="muted">Requests created by local agents. Nothing runs until you approve the exact operation here.</p>
+  </div>
+</section>
+
 <section class="panel">
-  <div class="panel-head"><h1>Operations</h1><span class="pill">human approval</span></div>
-  <p class="muted">Requests created by local agents. Nothing runs until you approve it here. Resume approval renders a PDF; submission approval opens the existing browser flow and submits only after the risk consent, daily cap, and quality gate pass. Deny anything you do not want executed.</p>
+  <div class="section-line">
+    <h2>Operations</h2>
+    <span class="muted-small">{{ counts.get('pending_approval', 0) }} waiting · {{ counts.get('running', 0) }} running</span>
+  </div>
+  <div class="filter-actions" style="margin-bottom:12px">
+    <a class="button tiny {{ 'primary' if not state else '' }}" href="/operations">All</a>
+    {% for value, label in [('pending_approval','Pending'), ('approved','Approved'), ('running','Running'), ('succeeded','Succeeded'), ('failed','Failed'), ('denied','Denied'), ('expired','Expired')] %}
+    <a class="button tiny {{ 'primary' if state == value else '' }}" href="/operations?state={{ value }}">{{ label }}{% if counts.get(value) %} · {{ counts[value] }}{% endif %}</a>
+    {% endfor %}
+  </div>
   {% if operations %}
-  <table class="compact">
-    <thead><tr><th>Job</th><th>Action</th><th>State</th><th>Created</th><th></th></tr></thead>
-    <tbody>
+  <div class="table-wrap">
+    <table class="table-cards">
+      <thead><tr><th>Job</th><th>Action</th><th>State</th><th>Requested by</th><th>Created</th><th></th></tr></thead>
+      <tbody>
       {% for item in operations %}
       <tr>
-        <td>{% if item.job %}{{ item.job.company }} · {{ item.job.title }}{% else %}Job #{{ item.operation.payload.job_id }}{% endif %}</td>
-        <td>{{ item.operation.action }}</td>
-        <td><span class="pill">{{ item.operation.state }}</span></td>
-        <td class="muted">{{ item.operation.created_at }}</td>
-        <td><a href="/operations/{{ item.operation.id }}">Review</a></td>
+        <td data-label="Job">{% if item.job %}<a href="/jobs/{{ item.job.id }}">{{ item.job.company }}</a><br><span class="muted-small">{{ item.job.title }}</span>{% else %}Job #{{ item.operation.payload.job_id }}{% endif %}</td>
+        <td data-label="Action">{{ 'Resume render' if item.operation.action == 'render_resume' else ('Submission' if item.operation.action == 'submit_application' else item.operation.action) }}</td>
+        <td data-label="State"><span class="pill {{ 'good' if item.operation.state == 'succeeded' else ('bad' if item.operation.state in ['failed','denied','expired'] else '') }}">{{ item.operation.state }}</span></td>
+        <td data-label="Requested by"><span class="source-label">{{ item.connection.label if item.connection else (item.operation.connection_id|short(22)) }}</span></td>
+        <td data-label="Created" class="muted-small">{{ item.operation.created_at[:16] }}</td>
+        <td data-label=""><a class="button tiny" href="/operations/{{ item.operation.id }}">Review</a></td>
       </tr>
       {% endfor %}
-    </tbody>
-  </table>
+      </tbody>
+    </table>
+  </div>
   {% else %}
-  <p class="empty">No agent operations yet.</p>
+  <div class="empty-action">
+    <strong>No operations{% if state %} in {{ state }}{% endif %}.</strong>
+    <p>Agent requests appear here for exact, one-use approval. The agent cannot approve or submit on its own.</p>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

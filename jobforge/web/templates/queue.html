@@ -3,56 +3,90 @@
 {% block content %}
 <section class="page-head">
   <div>
-    <p class="eyebrow">Supervised queue</p>
     <h1>Application queue</h1>
-    <p class="muted">Prepare one resume at a time. Open the job page to fill the application; the human still submits.</p>
+    <p class="muted">Prepare one resume at a time. You still review and click Submit on the job page.</p>
   </div>
-  <a class="button" href="/jobs">Browse jobs</a>
-</section>
-
-<section class="grid-2">
-  <div class="panel">
-    <div class="panel-head"><h2>Summary</h2><span class="muted">{{ queue_summary.total }} item(s)</span></div>
-    <table class="compact"><tbody>
-      <tr><td>Pending</td><td><strong>{{ queue_summary.pending }}</strong></td></tr>
-      <tr><td>Prepared</td><td><strong>{{ queue_summary.prepared }}</strong></td></tr>
-      <tr><td>Submitted</td><td><strong>{{ queue_summary.submitted }}</strong></td></tr>
-      <tr><td>Skipped</td><td><strong>{{ queue_summary.skipped }}</strong></td></tr>
-      <tr><td>Failed</td><td><strong>{{ queue_summary.failed }}</strong></td></tr>
-    </tbody></table>
-    <p class="muted">CLI: <code>jobforge queue prepare</code> then <code>jobforge queue apply --hold 600 --confirm</code>.</p>
-  </div>
-  <div class="panel">
-    <div class="panel-head"><h2>How this stays safe</h2></div>
-    <ul class="reasons">
-      <li>No captcha solving. A captcha hands the browser back to you.</li>
-      <li>No unattended bulk submission. The default path asks whether you submitted.</li>
-      <li>No Indeed or LinkedIn automation. Apply there manually.</li>
-      <li>Quality blockers stop the browser from opening.</li>
-    </ul>
+  <div class="actions">
+    <form method="post" action="/queue/build" class="inline">
+      <input type="number" name="limit" value="10" min="1" max="10" aria-label="Queue size" style="width:64px;min-height:36px;padding:6px">
+      <button class="primary">Build queue</button>
+    </form>
+    <a class="button" href="/jobs">Browse jobs</a>
   </div>
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>Items</h2><span class="muted">ranked by score</span></div>
-  {% if queue_items %}
-  <table>
-    <thead><tr><th>Job</th><th>Company</th><th>Score</th><th>Status</th><th>Resume</th><th>Note</th></tr></thead>
-    <tbody>
-    {% for item in queue_items %}
-      <tr>
-        <td><a class="link" href="/jobs/{{ item.job_id }}">{{ item.title|short(52) }}</a></td>
-        <td>{{ item.company|short(28) }}</td>
-        <td>{{ '%.1f'|format(item.score) }}</td>
-        <td><span class="pill {{ 'bad' if item.status == 'failed' else '' }}">{{ item.status }}</span></td>
-        <td class="muted">{% if item.resume_path %}<code>{{ item.resume_path|short(42) }}</code>{% else %}—{% endif %}</td>
-        <td class="muted">{{ item.note|short(80) }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="empty">The queue is empty. Build it from scored jobs with <code>jobforge queue build</code>.</p>
+  <div class="section-line">
+    <h2>Queue</h2>
+    <span class="muted-small">Match floor {{ '%.0f'|format(min_match) }} · {{ queue_summary.total }} item{{ '' if queue_summary.total == 1 else 's' }}</span>
+  </div>
+  <div class="queue-summary">
+    <span>Pending <strong>{{ queue_summary.pending }}</strong></span>
+    <span>Prepared <strong>{{ queue_summary.prepared }}</strong></span>
+    <span>Submitted <strong>{{ queue_summary.submitted }}</strong></span>
+    <span>Skipped <strong>{{ queue_summary.skipped }}</strong></span>
+    <span>Failed <strong>{{ queue_summary.failed }}</strong></span>
+  </div>
+  {% if below_floor_count %}
+  <div class="flash setup-flash">
+    {{ below_floor_count }} pending item{{ '' if below_floor_count == 1 else 's' }} sit below the current {{ '%.0f'|format(min_match) }} floor.
+    <form method="post" action="/queue/prune" class="inline" data-confirm="Remove pending queue items below the current match floor?"><button class="tiny ghost">Remove below-floor items</button></form>
+  </div>
   {% endif %}
+  {% if next_item %}
+  <div class="panel next-up">
+    <div class="panel-head"><h2>{{ 'Next up' if next_item.status == 'pending' else 'Ready to apply' }}</h2><span class="pill {{ 'good' if next_item.status == 'prepared' else '' }}">{{ next_item.status }}</span></div>
+    <p><strong>{{ next_item.title }}</strong> <span class="muted">· {{ next_item.company }} · {{ '%.1f'|format(next_item.score) }} fit</span></p>
+    <div class="queue-actions">
+      {% if next_item.status == 'pending' %}
+      <form method="post" action="/queue/prepare" class="inline"><button class="primary">Prepare resume</button></form>
+      {% endif %}
+      <a class="button" href="/jobs/{{ next_item.job_id }}">Open job</a>
+      <form method="post" action="/queue/{{ next_item.job_id }}/skip" class="inline" data-confirm="Skip this queue item?"><button class="ghost">Skip</button></form>
+    </div>
+  </div>
+  {% elif queue_items %}
+  <p class="empty">No pending or prepared items. Reopen a skipped item below or build from scored jobs.</p>
+  {% else %}
+  <div class="empty-action">
+    <strong>No queue yet.</strong>
+    <p>Build the supervised queue from roles that clear your match floor. You can inspect each job before preparing a resume.</p>
+    <form method="post" action="/queue/build"><button class="primary">Build queue from top matches</button></form>
+  </div>
+  {% endif %}
+
+  {% if queue_items %}
+  <div class="table-wrap">
+    <table class="table-cards queue-table">
+      <thead><tr><th>Job</th><th>Score</th><th>Status</th><th>Resume</th><th>Note</th><th></th></tr></thead>
+      <tbody>
+      {% for item in queue_items %}
+      <tr>
+        <td data-label="Job" class="job-cell"><a href="/jobs/{{ item.job_id }}"><strong>{{ item.title|short(58) }}</strong><span>{{ item.company }}</span></a></td>
+        <td data-label="Score"><span class="score {{ 'strong' if item.score >= 75 else ('ok' if item.score >= min_match else 'weak') }}">{{ '%.1f'|format(item.score) }}</span>{% if item.score < min_match and item.status in ['pending','prepared'] %}<br><span class="pill thin">below floor</span>{% endif %}</td>
+        <td data-label="Status"><span class="pill {{ 'bad' if item.status in ['failed','skipped'] else ('good' if item.status == 'prepared' else '') }}">{{ item.status }}</span>{% if item.error %}<br><span class="muted-small">{{ item.error|short(70) }}</span>{% endif %}</td>
+        <td data-label="Resume">{% if item.resume_path %}<a class="link" href="/jobs/{{ item.job_id }}">Review</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td data-label="Note" class="muted">{{ item.note|short(80) or '—' }}</td>
+        <td data-label="">
+          <div class="queue-actions">
+            <a class="button tiny" href="/jobs/{{ item.job_id }}">Open</a>
+            {% if item.status in ['pending', 'prepared'] %}
+            <form method="post" action="/queue/{{ item.job_id }}/skip" class="inline" data-confirm="Skip this queue item?"><button class="tiny ghost">Skip</button></form>
+            {% elif item.status in ['skipped', 'failed'] %}
+            <form method="post" action="/queue/{{ item.job_id }}/reopen" class="inline"><button class="tiny">Reopen</button></form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <details class="safety-note">
+    <summary>How the queue stays safe</summary>
+    <p>No captcha solving. No unattended bulk submission. No Indeed or LinkedIn automation. Quality blockers stop the browser from opening. A human still reviews and clicks Submit.</p>
+  </details>
 </section>
 {% endblock %}

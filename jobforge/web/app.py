@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import shutil
@@ -9,6 +10,7 @@ import sqlite3
 import tempfile
 import uuid
 from functools import wraps
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Generator
 from urllib.parse import urlsplit
@@ -39,6 +41,7 @@ from ..models import ApplicationStatus, Preferences, Profile
 from ..paths import default_config_path
 from ..queue import Queue
 from ..sources.registry import SOURCES, configured_boards
+from ..version import app_version
 from ..workbench.worker import launch_worker
 from . import setup_presets
 from .agent_routes import create_agent_router
@@ -50,6 +53,30 @@ templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 templates.env.filters["money"] = lambda v: f"${int(v):,}" if v else ""
 templates.env.filters["pct"] = lambda v: f"{float(v or 0) * 100:.0f}%"
 templates.env.filters["short"] = lambda v, n=140: (str(v or "")[:n] + ("..." if len(str(v or "")) > n else ""))
+
+
+SOURCE_LABELS = {
+    "greenhouse": "Greenhouse",
+    "lever": "Lever",
+    "ashby": "Ashby",
+    "workable": "Workable",
+    "smartrecruiters": "SmartRecruiters",
+    "workday": "Workday",
+    "github_jobs": "GitHub list",
+    "nyc_opendata": "NYC Open Data",
+    "usajobs": "USAJobs",
+    "direct": "Employer page",
+    "resume-forge": "Resume-forge",
+    "e2e": "Test source",
+}
+COMPETITION_LABELS = {
+    "direct_ats": "Direct employer",
+    "mass_aggregator": "Aggregator lead",
+    "direct_portal": "Direct portal",
+    "public_sector": "Public sector",
+    "niche": "Niche board",
+    "unknown": "Unknown",
+}
 
 
 def _msg(text: str) -> str:
@@ -381,6 +408,15 @@ def create_app(config: Config | None = None) -> FastAPI:
             # is never persisted and never reaches a domain query.
             profile, prefs = Profile(name=""), Preferences()
         setup_state = _setup_state(cfg, conn, profile)
+        pending_approvals = 0
+        if profile.id:
+            pending_approvals = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS n FROM agent_operations "
+                    "WHERE profile_id=? AND state='pending_approval'",
+                    (profile.id,),
+                ).fetchone()["n"]
+            )
         agent_ready = False
         if cfg.features.agent:
             try:
@@ -399,6 +435,12 @@ def create_app(config: Config | None = None) -> FastAPI:
             "setup_complete": setup_state["complete"],
             "features": cfg.features,
             "agent_ready": agent_ready,
+            "app_version": app_version(),
+            "pending_approvals": pending_approvals,
+            "data_dir": str(cfg.data_dir),
+            "db_path": str(cfg.db_path),
+            "source_labels": SOURCE_LABELS,
+            "competition_labels": COMPETITION_LABELS,
             "active_provider": infer_provider(cfg.llm),
             "active_model": cfg.llm.model,
         }
@@ -413,9 +455,9 @@ def create_app(config: Config | None = None) -> FastAPI:
         jobs = db.list_jobs(
             conn,
             profile.id,
-            one_per_company=ctx["prefs"].one_application_per_company,
+            min_score=0.1,
             limit=6,
-            sort_by="scan",
+            sort_by="fit",
         )
         graph = services.load_network(cfg)
         if graph:
@@ -426,12 +468,29 @@ def create_app(config: Config | None = None) -> FastAPI:
                 job["warm_channel"] = warm["channel"]
                 job["warm_score"] = warm["score"]
         apps = db.list_applications(conn, profile.id, limit=6)
-        runs = db.list_runs(conn, 5)
+        runs = db.list_runs(conn, 8)
+        queue = Queue(cfg.data_dir / "queue.json")
+        queue_items = queue.list_items()
+        queue_summary = queue.summary()
+        floor = float(ctx["prefs"].min_match or 0)
+        next_queue_item = next(
+            (
+                item
+                for item in queue_items
+                if item.status == "prepared"
+                or (item.status == "pending" and float(item.score or 0.0) >= floor)
+            ),
+            None,
+        )
         agent_connections = [
             item
             for item in db.list_agent_connections(conn)
             if int(item.get("profile_id") or 0) == int(profile.id or 0)
         ]
+        instances = {item["id"]: item for item in db.list_agent_instances(conn)}
+        for connection in agent_connections:
+            instance = instances.get(str(connection.get("instance_id") or ""), {})
+            connection["last_seen_at"] = instance.get("last_seen_at") or ""
         pending_operations = [
             item
             for item in db.list_agent_operations(conn, profile_id=profile.id, limit=20)
@@ -442,6 +501,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             job = db.get_job(conn, job_id) if job_id else None
             operation["job_company"] = job.company if job else ""
             operation["job_title"] = job.title if job else ""
+            connection = db.get_agent_connection(conn, str(operation.get("connection_id") or ""))
+            operation["connection_label"] = (
+                connection.get("label") or connection.get("client") if connection else ""
+            )
+        failed_runs = [run for run in runs if str(run.get("status")) == "failed"][:3]
         github_lead_jobs = db.list_jobs(
             conn, profile.id, source="github_jobs", min_score=0, limit=3, sort_by="scan"
         )
@@ -459,6 +523,9 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "runs": runs,
                 "agent_connections": agent_connections,
                 "pending_operations": pending_operations,
+                "failed_runs": failed_runs,
+                "queue_summary": queue_summary,
+                "next_queue_item": next_queue_item,
                 "github_lead_jobs": github_lead_jobs,
                 "github_lead_count": github_lead_count,
             },
@@ -479,6 +546,10 @@ def create_app(config: Config | None = None) -> FastAPI:
             hosts = detect_hosts()
         except Exception:  # noqa: BLE001 - display-only detection
             hosts = []
+        instances = {item["id"]: item for item in db.list_agent_instances(conn)}
+        for connection in connections:
+            instance = instances.get(str(connection.get("instance_id") or ""), {})
+            connection["last_seen_at"] = instance.get("last_seen_at") or ""
         return templates.TemplateResponse(
             request=request,
             name="agents.html",
@@ -492,12 +563,15 @@ def create_app(config: Config | None = None) -> FastAPI:
         min_score: float | None = None,
         min_scan: float | None = None,
         source: str = "",
-        sort: str = "scan",
+        sort: str = "fit",
+        page: int = 1,
         conn: sqlite3.Connection = Depends(get_conn),
     ):
         ctx = context(request, conn)
-        sort = sort if sort in {"scan", "fit", "recent"} else "scan"
-        rows = db.list_jobs(
+        sort = sort if sort in {"scan", "fit", "recent"} else "fit"
+        page_size = 25
+        page = max(1, int(page or 1))
+        all_rows = db.list_jobs(
             conn,
             ctx["profile"].id,
             q=q,
@@ -505,9 +579,14 @@ def create_app(config: Config | None = None) -> FastAPI:
             min_scan_score=min_scan,
             source=source,
             one_per_company=ctx["prefs"].one_application_per_company,
-            limit=200,
+            limit=10_000,
             sort_by=sort,
         )
+        total = len(all_rows)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, pages)
+        offset = (page - 1) * page_size
+        rows = all_rows[offset : offset + page_size]
         return templates.TemplateResponse(
             request=request,
             name="jobs.html",
@@ -519,6 +598,10 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "min_scan": min_scan,
                 "source": source,
                 "sort": sort,
+                "page": page,
+                "pages": pages,
+                "total": total,
+                "page_size": page_size,
             },
         )
 
@@ -891,15 +974,112 @@ def create_app(config: Config | None = None) -> FastAPI:
     def queue_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         ctx = context(request, conn)
         queue = Queue(cfg.data_dir / "queue.json")
+        items = queue.list_items()
+        rank = {"prepared": 0, "pending": 1, "submitted": 2, "skipped": 3, "failed": 4}
+        items = sorted(
+            items,
+            key=lambda item: (rank.get(item.status, 9), -float(item.score or 0.0)),
+        )
+        floor = float(ctx["prefs"].min_match or 0)
+        below_floor_count = sum(
+            1
+            for item in items
+            if item.status in {"pending", "prepared"} and float(item.score or 0.0) < floor
+        )
+        next_item = next(
+            (
+                item
+                for item in items
+                if item.status in {"prepared", "pending"}
+                and float(item.score or 0.0) >= floor
+            ),
+            None,
+        )
         return templates.TemplateResponse(
             request=request,
             name="queue.html",
             context={
                 **ctx,
                 "queue_summary": queue.summary(),
-                "queue_items": queue.list_items(),
+                "queue_items": items,
+                "next_item": next_item,
+                "min_match": ctx["prefs"].min_match,
+                "below_floor_count": below_floor_count,
             },
         )
+
+    @app.post("/queue/build")
+    @locked_write
+    def queue_build(
+        request: Request,
+        limit: int = Form(10),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        ctx = context(request, conn)
+        queue = Queue(cfg.data_dir / "queue.json")
+        limit = max(1, min(int(limit or 10), 10))
+        added = queue.build(
+            conn,
+            ctx["profile"],
+            ctx["prefs"],
+            limit=limit,
+            min_score=ctx["prefs"].min_match,
+        )
+        msg = (
+            f"Built {len(added)} queue item{'' if len(added) == 1 else 's'} "
+            f"at the {ctx['prefs'].min_match:g} match floor."
+            if added
+            else f"No new roles clear the {ctx['prefs'].min_match:g} match floor."
+        )
+        return RedirectResponse(f"/queue?msg={_msg(msg)}", status_code=303)
+
+    @app.post("/queue/prune")
+    @locked_write
+    def queue_prune(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+        ctx = context(request, conn)
+        queue = Queue(cfg.data_dir / "queue.json")
+        removed = queue.prune_below(float(ctx["prefs"].min_match or 0))
+        msg = (
+            f"Removed {removed} below-floor queue item{'' if removed == 1 else 's'}."
+            if removed
+            else "No below-floor pending items to remove."
+        )
+        return RedirectResponse(f"/queue?msg={_msg(msg)}", status_code=303)
+
+    @app.post("/queue/prepare")
+    @locked_write
+    def queue_prepare(conn: sqlite3.Connection = Depends(get_conn)):
+        queue = Queue(cfg.data_dir / "queue.json")
+        try:
+            item = queue.prepare_next(cfg, conn)
+            msg = f"Prepared {item.title}." if item.status == "prepared" else f"Preparation failed: {item.error or item.note}"
+        except (LookupError, quality.QualityBlocked) as exc:
+            msg = str(exc)
+        except Exception as exc:  # noqa: BLE001 - action boundary
+            msg = f"Preparation failed: {exc}"
+        return RedirectResponse(f"/queue?msg={_msg(msg)}", status_code=303)
+
+    @app.post("/queue/{job_id}/skip")
+    @locked_write
+    def queue_skip(job_id: int, conn: sqlite3.Connection = Depends(get_conn)):
+        queue = Queue(cfg.data_dir / "queue.json")
+        try:
+            queue.mark_skipped(job_id, note="skipped from dashboard")
+            msg = "Queue item skipped."
+        except LookupError as exc:
+            msg = str(exc)
+        return RedirectResponse(f"/queue?msg={_msg(msg)}", status_code=303)
+
+    @app.post("/queue/{job_id}/reopen")
+    @locked_write
+    def queue_reopen(job_id: int, conn: sqlite3.Connection = Depends(get_conn)):
+        queue = Queue(cfg.data_dir / "queue.json")
+        try:
+            queue.reopen(job_id)
+            msg = "Queue item reopened."
+        except (LookupError, ValueError) as exc:
+            msg = str(exc)
+        return RedirectResponse(f"/queue?msg={_msg(msg)}", status_code=303)
 
     @app.get("/autopilot", response_class=HTMLResponse)
     def autopilot_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
@@ -1011,6 +1191,28 @@ def create_app(config: Config | None = None) -> FastAPI:
         if job_id:
             job = db.get_job(conn, job_id)
         result = operation.get("result") or {}
+        profile = db.get_profile(conn, int(operation.get("profile_id") or 0))
+        connection = db.get_agent_connection(
+            conn, str(operation.get("connection_id") or "")
+        )
+        match = (
+            db.get_match(conn, int(job.id or 0), int(profile.id or 0))
+            if job is not None and profile is not None
+            else None
+        )
+        events = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT seq, at, kind, detail_json FROM agent_operation_events "
+                "WHERE operation_id=? ORDER BY seq",
+                (operation.get("id"),),
+            ).fetchall()
+        ]
+        for event in events:
+            try:
+                event["detail"] = json.loads(event.get("detail_json") or "{}")
+            except (TypeError, ValueError):
+                event["detail"] = {}
         artifact_url = (
             f"/artifacts/{int(result['application_id'])}/resume"
             if result.get("application_id")
@@ -1058,6 +1260,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {
             "operation": operation,
             "job": job,
+            "profile": profile,
+            "connection": connection,
+            "match": match,
+            "events": events,
             "artifact_url": artifact_url,
             "quality_blockers": quality_blockers,
             "quality_warnings": quality_warnings,
@@ -1067,16 +1273,26 @@ def create_app(config: Config | None = None) -> FastAPI:
         }
 
     @app.get("/operations", response_class=HTMLResponse)
-    def operations_page(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+    def operations_page(
+        request: Request,
+        state: str = "",
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
         ctx = context(request, conn)
         rows = db.list_agent_operations(
             conn, profile_id=ctx["profile"].id, limit=50
         )
+        counts: dict[str, int] = {}
+        for row in rows:
+            key = str(row.get("state") or "unknown")
+            counts[key] = counts.get(key, 0) + 1
+        if state:
+            rows = [row for row in rows if str(row.get("state")) == state]
         operations = [_operation_view(conn, row) for row in rows]
         return templates.TemplateResponse(
             request=request,
             name="operations.html",
-            context={**ctx, "operations": operations},
+            context={**ctx, "operations": operations, "state": state, "counts": counts},
         )
 
     @app.get("/operations/{operation_id}", response_class=HTMLResponse)
@@ -1092,6 +1308,34 @@ def create_app(config: Config | None = None) -> FastAPI:
             name="operation.html",
             context={**ctx, **_operation_view(conn, operation)},
         )
+
+    @app.get("/api/operations/{operation_id}")
+    def operation_state(operation_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+        profile, _prefs = services.read_profile(cfg, conn)
+        operation = db.get_agent_operation(conn, operation_id)
+        if (
+            operation is None
+            or profile is None
+            or int(operation["profile_id"]) != int(profile.id or 0)
+        ):
+            raise HTTPException(status_code=404, detail="Operation not found")
+        events = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT seq, at, kind, detail_json FROM agent_operation_events "
+                "WHERE operation_id=? ORDER BY seq",
+                (operation_id,),
+            ).fetchall()
+        ]
+        return {
+            "id": operation["id"],
+            "state": operation["state"],
+            "action": operation["action"],
+            "result": operation.get("result") or {},
+            "error_code": operation.get("error_code") or "",
+            "error_message": operation.get("error_message") or "",
+            "events": events,
+        }
 
     @app.post("/operations/{operation_id}/approve")
     def operation_approve(
@@ -1650,9 +1894,22 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
     @app.get("/api/status")
-    def api_status(conn: sqlite3.Connection = Depends(get_conn)):
+    def api_status(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         profile, _ = services.require_profile(cfg, conn)
-        return db.stats(conn, profile.id)
+        stats = db.stats(conn, profile.id)
+        stats.update(
+            {
+                "app_version": app_version(),
+                "profile": profile.name,
+                "profile_id": profile.id,
+                "data_dir": str(cfg.data_dir),
+                "db_path": str(cfg.db_path),
+                "host": request.url.hostname or cfg.server.host,
+                "port": request.url.port or cfg.server.port,
+                "pid": os.getpid(),
+            }
+        )
+        return stats
 
     @app.get("/healthz")
     def healthz():

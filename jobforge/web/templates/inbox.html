@@ -2,7 +2,7 @@
 {% block title %}Inbox · JobForge{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><p class="eyebrow">Email</p><h1>Inbox</h1></div>
+  <div><h1>Inbox</h1></div>
   <form method="post" action="/email/poll"><button class="primary">Poll IMAP</button></form>
 </section>
 
@@ -24,7 +24,7 @@
     </tbody>
   </table>
   {% else %}
-  <p class="empty">No messages yet. Configure IMAP in <code>config.yml</code> and set <code>JOBFORGE_IMAP_PASSWORD</code>.</p>
+  <div class="empty-action"><strong>No messages yet.</strong><p>Configure IMAP in <code>config.yml</code> and set <code>JOBFORGE_IMAP_PASSWORD</code>. Email polling can suggest status changes; it never submits an application.</p><a class="button" href="/settings">Open settings</a></div>
   {% endif %}
 </section>
 {% endblock %}

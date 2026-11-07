@@ -24,6 +24,7 @@ from .models import ApplicationStatus, Preferences, Profile, utcnow
 QUEUE_STATUSES = ("pending", "prepared", "submitted", "skipped", "failed")
 VALID_STATUSES = frozenset(QUEUE_STATUSES)
 QUEUE_VERSION = 1
+ACTIVE_STATUSES = frozenset({"pending", "prepared", "submitted"})
 
 _UNSET = object()
 
@@ -158,9 +159,20 @@ class Queue:
             raise ValueError("Cannot build a queue for an unsaved profile")
 
         one_per_company = bool(prefs.one_application_per_company)
-        existing_ids = {item.job_id for item in self._items}
+        # A skipped or failed item is a decision about that attempt, not a
+        # permanent reservation of the job id or company slot. Only active
+        # items block a future build.
+        active_items = [
+            item for item in self._items if item.status in ACTIVE_STATUSES
+        ]
+        existing_ids = {item.job_id for item in active_items}
         existing_companies = {
-            item.company.strip().lower() for item in self._items if item.company.strip()
+            item.company.strip().lower() for item in active_items if item.company.strip()
+        }
+        reopenable = {
+            item.job_id: item
+            for item in self._items
+            if item.status in {"skipped", "failed"}
         }
         added: list[QueueItem] = []
         offset = 0
@@ -188,6 +200,21 @@ class Queue:
                 company = str(row.get("company") or "")
                 company_key = company.strip().lower()
                 if one_per_company and company_key and company_key in existing_companies:
+                    continue
+                reopened = reopenable.pop(job_id, None)
+                if reopened is not None:
+                    reopened.status = "pending"
+                    reopened.score = float(row.get("score") or 0.0)
+                    reopened.company = company
+                    reopened.title = str(row.get("title") or "")
+                    reopened.resume_path = ""
+                    reopened.error = ""
+                    reopened.note = ""
+                    reopened.updated_at = utcnow()
+                    added.append(reopened)
+                    existing_ids.add(job_id)
+                    if company_key:
+                        existing_companies.add(company_key)
                     continue
                 item = QueueItem(
                     job_id=job_id,
@@ -236,6 +263,33 @@ class Queue:
             error=str(error) if error is not None else "",
             note=note,
         )
+
+    def reopen(self, job_id: int) -> QueueItem:
+        """Return a skipped or failed item to the pending queue."""
+        return self._transition(
+            job_id,
+            "pending",
+            resume_path="",
+            error="",
+            note="",
+        )
+
+    def prune_below(self, min_score: float) -> int:
+        """Remove pending/prepared items below the current match floor."""
+        with self._locked():
+            before = len(self._items)
+            self._items = [
+                item
+                for item in self._items
+                if not (
+                    item.status in {"pending", "prepared"}
+                    and float(item.score or 0.0) < float(min_score)
+                )
+            ]
+            removed = before - len(self._items)
+            if removed:
+                self._save()
+            return removed
 
     # ------------------------------------------------------------------
     # Supervised actions

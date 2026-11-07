@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ job.title }} · JobForge{% endblock %}
 {% block content %}
-<section class="page-head">
+<section class="page-head job-sticky">
   <div>
-    <p class="eyebrow"><a href="/jobs">Jobs</a> / {{ job.source }}</p>
+    <p class="breadcrumb"><a href="/jobs">Jobs</a> / {{ source_labels.get(job.source, job.source) }}</p>
     <h1>{{ job.title }}</h1>
     <p class="muted">{{ job.company }}{% if job.location %} · {{ job.location }}{% endif %}{% if job.remote %} · Remote{% endif %}{% if job.salary_min %} · {{ job.salary_min|money }}{% if job.salary_max %} – {{ job.salary_max|money }}{% endif %}{% endif %}</p>
   </div>
   <div class="actions">
     {% if job.apply_url %}<a class="button" href="{{ job.apply_url }}" target="_blank" rel="noopener">Original posting</a>{% endif %}
     <form method="post" action="/jobs/{{ job.id }}/tailor"><button class="primary">Tailor resume</button></form>
-    <form method="post" action="/jobs/{{ job.id }}/apply"><button {% if not quality_ready %}disabled title="Quality gate is blocked; fix the blocker checks first"{% endif %}>Fill application</button></form>
-    <form method="post" action="/jobs/{{ job.id }}/save"><button class="ghost">Save</button></form>
-    <form method="post" action="/jobs/{{ job.id }}/hide"><button class="ghost">Hide</button></form>
+    <form method="post" action="/jobs/{{ job.id }}/apply"><button {% if not quality_ready %}disabled title="Quality gate is blocked; fix the blocker checks first"{% endif %}>Review &amp; fill</button></form>
+    <form method="post" action="/jobs/{{ job.id }}/save"><button class="ghost">{{ 'Saved' if job.saved else 'Save job' }}</button></form>
+    <form method="post" action="/jobs/{{ job.id }}/hide" data-confirm="Hide this job from the feed?"><button class="ghost">Hide job</button></form>
   </div>
 </section>
 
@@ -28,8 +28,9 @@
     {% endif %}
   </div>
 
-  <div class="panel">
+  <div class="panel fit-card">
     <div class="panel-head"><h2>Fit</h2><span class="score big {{ 'strong' if match and match.score >= 75 else ('ok' if match and match.score >= 55 else 'weak') }}">{{ '%.0f'|format(match.score) if match else '—' }}</span></div>
+    {% if match and match.meta and match.meta.thin_jd %}<p><span class="pill warn">Sparse JD</span> <span class="muted-small">This score is penalized because the posting has too little verifiable requirement text.</span></p>{% endif %}
     {% if match %}
       <div class="meter-row"><span>Skill coverage</span><div class="meter"><i style="width: {{ (match.coverage * 100)|round(0) }}%"></i></div><b>{{ match.coverage|pct }}</b></div>
       <div class="meter-row"><span>Gate survival</span><div class="meter"><i style="width: {{ (match.gate_survival * 100)|round(0) }}%"></i></div><b>{{ match.gate_survival|pct }}</b></div>
@@ -78,8 +79,8 @@
 {% if quality %}
 <section class="panel">
   <div class="panel-head">
-    <h2>Pre-submit quality</h2>
-    <span class="score {{ 'strong' if quality.ready else 'weak' }}">{{ quality.score }}</span>
+    <h2>Review readiness</h2>
+    <span class="pill {{ 'good' if quality.ready else 'danger' }}">{{ quality.score }}/100 · {{ 'ready' if quality.ready else 'blocked' }}</span>
   </div>
   <p>
     {% if quality.ready %}
@@ -139,20 +140,23 @@
 {% if match and match.requirements %}
 <section class="panel">
   <div class="panel-head"><h2>Requirement coverage</h2><span class="muted">Weighted by must-have vs. nice-to-have</span></div>
-  <table>
+  <div class="table-wrap">
+  <table class="requirements-table table-cards">
     <thead><tr><th>Requirement</th><th>Skill</th><th>Importance</th><th>Credit</th><th>Matched by</th></tr></thead>
     <tbody>
     {% for r in match.requirements %}
       <tr class="{{ 'gaprow' if r.gap else '' }}">
-        <td>{{ r.requirement|short(120) }}</td>
-        <td>{{ r.skill or '—' }}</td>
-        <td>{{ r.importance }}</td>
-        <td>{{ '%.0f'|format(r.credit * 100) }}%</td>
-        <td class="muted">{{ r.matched_by }}</td>
+        <td data-label="Requirement" class="requirement-text">{{ r.requirement|short(160) }}</td>
+        <td data-label="Skill">{{ r.skill or '—' }}{% if r.skills and r.skills|length > 1 %}<br><span class="muted-small">{{ r.skills|join(' · ') }}</span>{% endif %}</td>
+        <td data-label="Importance">{{ r.importance }}</td>
+        <td data-label="Credit">{% if r.weight == 0 %}<span class="not-scored">not scored</span>{% else %}{{ '%.0f'|format(r.credit * 100) }}%{% if r.thin %}<br><span class="pill thin">thin evidence</span>{% endif %}{% endif %}</td>
+        <td data-label="Matched by" class="muted">{{ 'not parsed' if r.matched_by == 'unparsed' else r.matched_by }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
+  <p class="muted-small">Rows with weight 0 are displayed for context but excluded from the calibrated fit denominator.</p>
 </section>
 {% endif %}
 

@@ -146,6 +146,7 @@ make test       # pytest
 make audit      # parity + security
 make decisions  # 14 frozen decision cases
 make e2e        # offline FastAPI + Typst smoke
+make ui-smoke   # browser contract smoke (desktop + mobile)
 ```
 
 Dependencies are pinned in `requirements.lock`. CI runs `test`, `audit`, `decisions`, and `e2e`; the live ATS smoke is manual and never submits.

@@ -2,11 +2,11 @@
 {% block title %}Applications · JobForge{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><p class="eyebrow">Track</p><h1>Applications</h1></div>
+  <div><h1>Applications</h1></div>
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>{{ apps|length }} records</h2><span class="muted">Status is yours to update; email polling can suggest changes.</span></div>
+  <div class="panel-head"><h2>{{ apps|length }} record{{ '' if apps|length == 1 else 's' }}</h2><span class="muted">Status is yours to update; email polling can suggest changes.</span></div>
   {% if apps %}
   <table>
     <thead><tr><th>Company</th><th>Role</th><th>ATS</th><th>Status</th><th>Updated</th><th>Resume</th></tr></thead>
@@ -18,7 +18,7 @@
         <td class="muted">{{ app.ats or '—' }}</td>
         <td>
           <form method="post" action="/applications/{{ app.id }}/status" class="inline">
-            <select name="status" data-autosubmit>
+            <select name="status" data-autosubmit aria-label="Application status">
               {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if app.status == s else '' }}>{{ s }}</option>{% endfor %}
             </select>
             <noscript><button class="ghost">Update</button></noscript>

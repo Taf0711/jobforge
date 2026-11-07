@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from urllib.parse import unquote
@@ -10,7 +11,7 @@ from jobforge import db
 from jobforge.config import Config, BrowserConfig, EmailConfig, LLMConfig, ServerConfig
 from jobforge.locking import action_lock
 from jobforge.matching.score import score_job
-from jobforge.models import Application, Job, MatchResult, Profile
+from jobforge.models import Application, Job, MatchResult, Preferences, Profile
 from jobforge.queue import Queue
 from jobforge.web.app import create_app
 
@@ -324,3 +325,99 @@ def test_write_returns_busy_while_another_action_holds_the_lock(tmp_path: Path):
 
     assert response.status_code == 303
     assert "Another JobForge action is running" in unquote(response.headers["location"])
+
+
+def test_workbench_shell_has_live_store_identity_and_no_more_overlay(tmp_path: Path):
+    cfg = _config(tmp_path)
+    cfg.ensure_dirs()
+    app = create_app(cfg)
+    conn = db.connect(cfg.db_path)
+    profile_id = db.save_profile(conn, Profile(name="web-test"))
+    db.set_active_profile(conn, profile_id)
+    db.setting_set(conn, "setup_complete", "1")
+    conn.close()
+
+    response = TestClient(app).get("/")
+    assert response.status_code == 200
+    assert "Live store" in response.text
+    assert "v" in response.text
+    assert "nav-more" not in response.text
+    assert "More" not in response.text
+
+
+def test_jobs_page_labels_filters_and_paginates(tmp_path: Path):
+    cfg = _config(tmp_path)
+    cfg.ensure_dirs()
+    app = create_app(cfg)
+    conn = db.connect(cfg.db_path)
+    profile_id = db.save_profile(conn, Profile(name="web-test"))
+    job_id = db.upsert_job(
+        conn,
+        Job(source="greenhouse", source_id="ui-1", company="Acme", title="Engineer"),
+    )
+    db.set_match(
+        conn,
+        MatchResult(job_id=job_id, profile_id=profile_id, score=80, coverage=0.8, gate_survival=1.0),
+    )
+    db.set_active_profile(conn, profile_id)
+    db.setting_set(conn, "setup_complete", "1")
+    conn.close()
+
+    response = TestClient(app).get("/jobs")
+    assert response.status_code == 200
+    assert 'for="jobs-min-fit"' in response.text
+    assert "Page 1 of 1" in response.text
+    assert "Minimum fit" in response.text
+
+
+def test_queue_build_skip_and_reopen_routes(tmp_path: Path):
+    cfg = _config(tmp_path)
+    cfg.ensure_dirs()
+    app = create_app(cfg)
+    conn = db.connect(cfg.db_path)
+    profile_id = db.save_profile(conn, Profile(name="web-test"))
+    db.save_preferences(conn, profile_id, Preferences(min_match=55))
+    job_id = db.upsert_job(
+        conn,
+        Job(source="greenhouse", source_id="queue-ui-1", company="Acme", title="Engineer"),
+    )
+    db.set_match(
+        conn,
+        MatchResult(job_id=job_id, profile_id=profile_id, score=90, coverage=0.9, gate_survival=1.0),
+    )
+    db.set_active_profile(conn, profile_id)
+    db.setting_set(conn, "setup_complete", "1")
+    conn.close()
+
+    client = TestClient(app)
+    built = client.post("/queue/build", data={"limit": "10"}, follow_redirects=False)
+    assert built.status_code == 303
+    queue = json.loads((cfg.data_dir / "queue.json").read_text(encoding="utf-8"))
+    assert [item["job_id"] for item in queue["items"]] == [job_id]
+
+    skipped = client.post(f"/queue/{job_id}/skip", follow_redirects=False)
+    assert skipped.status_code == 303
+    queue = json.loads((cfg.data_dir / "queue.json").read_text(encoding="utf-8"))
+    assert queue["items"][0]["status"] == "skipped"
+
+    reopened = client.post(f"/queue/{job_id}/reopen", follow_redirects=False)
+    assert reopened.status_code == 303
+    queue = json.loads((cfg.data_dir / "queue.json").read_text(encoding="utf-8"))
+    assert queue["items"][0]["status"] == "pending"
+
+
+def test_api_status_identifies_the_live_store(tmp_path: Path):
+    cfg = _config(tmp_path)
+    cfg.ensure_dirs()
+    app = create_app(cfg)
+    conn = db.connect(cfg.db_path)
+    profile_id = db.save_profile(conn, Profile(name="web-test"))
+    db.set_active_profile(conn, profile_id)
+    conn.close()
+
+    data = TestClient(app).get("/api/status").json()
+    assert data["profile"] == "web-test"
+    assert data["data_dir"] == str(cfg.data_dir)
+    assert data["db_path"] == str(cfg.db_path)
+    assert data["port"] == cfg.server.port
+    assert data["pid"] > 0

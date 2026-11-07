@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.7.0 — workbench dashboard, actionable queue, and live approvals (2026-11-07)
+
+- Replaced the static dashboard shell with a workbench: left rail on desktop,
+  off-canvas drawer on mobile, live store/profile/version context, and no
+  auto-opening "More" menu. Every page now identifies the store it is reading.
+- Rebuilt Today around "Needs you": approvals, queue items, failed runs, setup,
+  pipeline counts, fit-sorted top roles, agent activity, and actionable empty
+  states. Scan-sorted rows no longer masquerade as best matches.
+- Approvals are now a review workspace: job/profile context, fit, artifact
+  preview, quality/risk/cap state, requested-by connection, timeline, and a
+  sticky approve/deny bar. `/api/operations/{id}` and a polling client update
+  approved/running/succeeded states without a refresh.
+- Queue is actionable from the dashboard: build, prepare, open, skip, reopen,
+  prune below-floor items. Skipped and failed items no longer reserve their job
+  id or company slot; a better same-company job can re-enter.
+- Jobs is a fit-first explorer: labeled filters, fit/scan/newest sort,
+  pagination, neutral unscored rows, human-readable sources, row actions, and
+  mobile card rows. Job detail gets a sticky action bar and requirement rows
+  that distinguish "not scored" and "thin evidence".
+- Profiles ask before applying an import, use a CSP-safe reparse confirmation,
+  and expose the project bank earlier. Agents group scopes read/write, update
+  last-seen from an MCP startup heartbeat, and provide copy-config guidance.
+- Models are searchable; settings have section navigation; runs, inbox,
+  answers, and autopilot have clearer empty/error states and less raw config.
+- Added `scripts/ui_smoke.py` and `make ui-smoke`: 30 desktop/mobile route
+  checks for console errors, overflow, the old More menu, store identity, and
+  labeled filters.
+- Tests: **575 passed**; audit **0 high / 0 medium**; decisions **14/14**;
+  adapter eval and offline e2e **ok**; UI smoke **30/30**. The submission tool
+  remains experimental until a successful live submit smoke on a captcha-free,
+  employer-sanctioned test form.
+
+## 0.6.7 — queue reservations and live-store dashboard (2026-11-07)
+
+- Queue builds now treat only `pending`, `prepared`, and `submitted` items as
+  active reservations. `skipped` and `failed` items no longer permanently
+  consume their job id or company slot.
+- Rebuilding for a skipped/failed job reopens that item instead of appending a
+  duplicate; a better job at the same company can enter when it ranks first.
+- Tests: **571 passed**; audit **0 high / 0 medium**.
+
 ## 0.6.6 — title and sparse-requirement calibration (2026-11-07)
 
 - Title relevance now requires a software-adjacent title token for the 0.85
