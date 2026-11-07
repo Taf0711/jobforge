@@ -147,6 +147,9 @@ def test_apply_is_idempotent_and_does_not_duplicate_connections(tmp_path: Path, 
     _no_host_cli(monkeypatch)
 
     first = apply_plan(cfg, conn, ["claude_code", "pi"], home=home)
+    legacy = home / ".claude" / "skills" / "jobforge.jobforge.bak"
+    legacy.mkdir(parents=True)
+    (legacy / "SKILL.md").write_text("old backup", encoding="utf-8")
     second = apply_plan(cfg, conn, ["claude_code", "pi"], home=home)
     connections = db.list_agent_connections(conn)
     conn.close()
@@ -156,7 +159,8 @@ def test_apply_is_idempotent_and_does_not_duplicate_connections(tmp_path: Path, 
     assert len(connections) == 2
     assert {item["client"] for item in connections} == {"claude_code", "pi"}
     assert all(item["connection"] == "existing" for item in second["hosts"])
-    assert (home / ".claude" / "skills" / "jobforge.jobforge.bak" / "SKILL.md").is_file()
+    assert (home / ".claude" / "skills.jobforge.bak" / "jobforge" / "SKILL.md").is_file()
+    assert not (home / ".claude" / "skills" / "jobforge.jobforge.bak").exists()
 
 
 def test_missing_codex_cli_is_reported_without_partial_install(tmp_path: Path, monkeypatch):

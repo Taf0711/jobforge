@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3 — installer skill backups outside the skills root (2026-11-06)
+
+- `jobforge install apply` no longer writes the previous skill to
+  `<skills>/<name>.jobforge.bak`. That directory was indexed by hosts as a
+  second skill with the same name, so an agent could load the stale copy while
+  the live `<skills>/jobforge` was current. Backups now land beside the skills
+  root in `<skills>.jobforge.bak/jobforge`, which no host scans.
+- Existing hosts that already carry `<skills>/jobforge.jobforge.bak` have that
+  duplicate removed on the next `install apply`.
+
 ## 0.6.2 — MCP write surface, project repair, and authorized submission (2026-11-04)
 
 - Added scope-gated MCP write tools: `jobforge_scan` (`scan:run`),

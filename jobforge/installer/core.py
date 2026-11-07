@@ -517,9 +517,17 @@ def _export_skill(spec: HostSpec) -> tuple[str, str]:
     destination = spec.skill_dir / SERVER_NAME
     skill_backup = ""
     if destination.exists():
-        backup = destination.with_name(f"{SERVER_NAME}.jobforge.bak")
+        # Older installers wrote the backup beside the live skill inside the
+        # skills root. Remove that duplicate when upgrading; hosts index it as
+        # a second skill with the same name.
+        legacy_backup = destination.with_name(f"{SERVER_NAME}.jobforge.bak")
+        if legacy_backup.exists():
+            shutil.rmtree(legacy_backup)
+        # Keep the new backup beside the skills root, never inside it.
+        backup = spec.skill_dir.with_name(f"{spec.skill_dir.name}.jobforge.bak") / SERVER_NAME
         if backup.exists():
             shutil.rmtree(backup)
+        backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(destination, backup)
         skill_backup = str(backup)
     destination.parent.mkdir(parents=True, exist_ok=True)
