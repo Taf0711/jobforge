@@ -82,14 +82,17 @@ def test_scoring_v2_uses_evidence_and_stops_prose_credit():
     current = score_job(job, profile, prefs, scoring_v2=True)
     legacy = score_job(job, profile, prefs, scoring_v2=False)
 
-    # Python is in the skills list only (0.4 evidence) and the prose line has
-    # no verifiable skill credit in v2.
-    assert current.coverage == 0.2
+    # Python is in the skills list only (0.4 evidence), and the unparsed prose
+    # row is excluded from the v2 denominator. Legacy keeps neutral prose credit.
+    assert current.coverage == 0.4
     assert current.score == 20.0
+    assert current.meta["sparse_jd"] is True
     assert legacy.coverage == 0.8
     assert legacy.score == 80.0
     assert any(row["matched_by"] == "unparsed" for row in current.requirements)
     assert any(row["matched_by"] == "direct" for row in current.requirements)
+    unparsed = next(row for row in current.requirements if row["matched_by"] == "unparsed")
+    assert unparsed["weight"] == 0.0
 
 
 def test_context_skills_do_not_make_a_jd_non_thin():

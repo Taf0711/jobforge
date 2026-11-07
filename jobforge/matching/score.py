@@ -167,21 +167,40 @@ TITLE_GENERIC = {
 HEAD_NOUNS = {"engineer", "developer", "analyst", "scientist", "designer", "manager", "architect"}
 
 
-def _title_gate(job: Job, prefs: Preferences) -> tuple[float, str]:
+def _title_gate(
+    job: Job, prefs: Preferences, profile: Profile | None = None
+) -> tuple[float, str]:
     title = job.title.lower()
-    wants_intern = any("intern" in t.lower() for t in prefs.experience_levels)
-    if INTERN_TITLE.search(title) and not wants_intern:
-        return 0.55, "Internship title outside your target levels"
+    wanted_titles = list(prefs.titles)
     levels = {level.lower() for level in prefs.experience_levels}
+    if profile is not None:
+        if not wanted_titles:
+            wanted_titles.extend(
+                str(entry.get("title") or "").strip()
+                for entry in (profile.experience or [])[:2]
+                if str(entry.get("title") or "").strip()
+            )
+            if profile.headline.strip():
+                wanted_titles.append(profile.headline.strip())
+        if not levels:
+            hint = " ".join(
+                [profile.headline]
+                + [str(entry.get("title") or "") for entry in (profile.experience or [])[:2]]
+            ).lower()
+            if re.search(r"\b(new\s+grad(?:uate)?|entry[- ]level|junior|intern(?:ship)?)\b", hint):
+                levels = {"entry", "junior"}
+    wants_intern = any("intern" in t.lower() for t in levels)
+    if INTERN_TITLE.search(title) and not wants_intern:
+        return 0.50, "Internship title outside your target levels"
     if SENIOR_TITLE.search(title) and ({"entry", "junior", "internship"} & levels):
-        return 0.60, "Senior title vs. entry/junior target"
-    if not prefs.titles:
+        return 0.50, "Senior title vs. entry/junior target"
+    if not wanted_titles:
         return 1.0, ""
-    for wanted in prefs.titles:
+    for wanted in wanted_titles:
         if wanted.lower().strip() in title:
             return 1.0, f"Title alignment: {job.title}"
     title_tokens = {t.lower() for t in re.findall(r"[a-z0-9+#.]+", title) if len(t) > 2}
-    for wanted in prefs.titles:
+    for wanted in wanted_titles:
         wanted_tokens = {
             t.lower()
             for t in re.findall(r"[a-z0-9+#.]+", wanted)
@@ -191,7 +210,7 @@ def _title_gate(job: Job, prefs: Preferences) -> tuple[float, str]:
             return 1.0, f"Title alignment: {job.title}"
     if title_tokens & HEAD_NOUNS:
         return 0.85, f"Title is adjacent to your targets: {job.title}"
-    return 0.70, f"Title is outside your target families: {job.title}"
+    return 0.60, f"Title is outside your target families: {job.title}"
 
 
 def _evidence(profile: Profile) -> dict[str, float]:
@@ -222,17 +241,18 @@ def score_job(
     scoring_v2: bool = True,
 ) -> MatchResult:
     graph = graph or GRAPH
-    text = f"{job.title}\n{job.company}\n{job.location}\n{job.description or ''}"
-    jd = parse_jd(text, title_hint=job.title, company_hint=job.company, location_hint=job.location)
-
-    requirements = jd.requirements
-    if not requirements:
-        requirements = [{"text": job.title, "skill": s, "importance": "must", "kind": "skill"} for s in jd.skills[:8]]
-    if not requirements:
-        requirements = [{"text": job.title, "skill": None, "importance": "must", "kind": "prose"}]
+    # Only the description is requirement evidence. Titles, company names, and
+    # locations may contain skill-like tokens (for example a company named
+    # Datadog or a title containing Machine Learning) but are not requirements.
+    jd = parse_jd(
+        job.description or "",
+        title_hint=job.title,
+        company_hint=job.company,
+        location_hint=job.location,
+    )
 
     coverage_result = coverage(
-        requirements,
+        jd.requirements,
         _all_profile_skills(profile),
         graph,
         _evidence(profile),
@@ -355,7 +375,7 @@ def score_job(
     loc_gate, relocation_fit, loc_reason, loc_gap = _location_gate(job, jd, prefs)
     gates.append((loc_gate, loc_reason, loc_gap))
 
-    title_gate, title_reason = _title_gate(job, prefs)
+    title_gate, title_reason = _title_gate(job, prefs, profile)
     gates.append((title_gate, title_reason, "" if title_gate >= 0.8 else "Title level mismatch"))
 
     gate_salary_min = job.salary_min if job.salary_min is not None else jd.salary_min
@@ -370,10 +390,23 @@ def score_job(
         survival *= value
     survival = max(0.0, min(1.0, survival))
 
-    parsed_skills = [
-        r for r in jd.requirements
-        if r.get("skill") and str(r.get("importance", "")).lower() in {"must", "nice"}
+    parsed_rows = [
+        row
+        for row in jd.requirements
+        if str(row.get("importance", "")).lower() in {"must", "nice"}
+        and (row.get("skills") or row.get("skill"))
     ]
+    parsed_skills = [
+        skill
+        for row in parsed_rows
+        for skill in (row.get("skills") or ([row["skill"]] if row.get("skill") else []))
+        if skill
+    ]
+    sparse_jd = (
+        scoring_v2
+        and len(parsed_rows) < 2
+        and len(jd.requirements) > len(parsed_rows)
+    )
     description = job.description or ""
     lowered = description.lower()
     lead_only = any(
@@ -383,7 +416,7 @@ def score_job(
             "open the employer posting",
         )
     )
-    thin_jd = lead_only or not parsed_skills
+    thin_jd = lead_only or not parsed_skills or sparse_jd
     score = round(100.0 * coverage_result.coverage * survival * (0.5 if thin_jd else 1.0), 1)
     reasons = [reason for _, reason, _ in gates if reason]
     gaps = [gap for _, _, gap in gates if gap] + coverage_result.gaps
@@ -441,6 +474,7 @@ def score_job(
         },
         "years": years_meta,
         "thin_jd": thin_jd,
+        "sparse_jd": sparse_jd,
         "lead_only": lead_only,
         "word_count": len(description.split()),
         "parsed_skills": len(parsed_skills),

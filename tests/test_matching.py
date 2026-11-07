@@ -30,6 +30,13 @@ def test_extract_skills_does_not_match_next_generation():
     assert "Next.js" in extract_skills("Experience with Next.js and React")
 
 
+def test_extract_skills_guards_date_and_go_to_market_homonyms():
+    assert "Spring" not in extract_skills("Must be graduating in Spring 2027")
+    assert "Spring" in extract_skills("Spring Boot and Spring Framework")
+    assert "Go" not in extract_skills("Own the Go to market strategy")
+    assert "Go" in extract_skills("Experience with Go and Python")
+
+
 def test_partial_credit_from_adjacent_language():
     graph = SkillGraph()
     result = coverage(
@@ -188,6 +195,48 @@ def test_thin_jd_is_capped():
     assert any("thin" in g.lower() for g in result.gaps)
 
 
+def test_or_language_clause_is_one_requirement_row():
+    jd = parse_jd(
+        "Requirements:\n- Proficiency in Java, Rust, Scala, C++, or C.\n- Python"
+    )
+
+    rows = [
+        row for row in jd.requirements
+        if "Proficiency in Java" in row.get("text", "")
+    ]
+    assert len(rows) == 1
+    assert {"Java", "Rust", "Scala", "C++", "C"} <= set(rows[0]["skills"])
+
+
+def test_title_and_company_are_not_requirement_evidence():
+    job = Job(
+        id=1,
+        source="ashby",
+        source_id="1",
+        company="Datadog",
+        title="Machine Learning Engineer",
+        location="Remote",
+        description="Requirements:\n- Python",
+    )
+    result = score_job(
+        job,
+        _profile(skills=["Python"]),
+        Preferences(titles=["Software Engineer"], locations=["Remote"]),
+    )
+
+    assert all("Datadog" not in row["requirement"] for row in result.requirements)
+    assert all("Machine Learning" not in (row["skill"] or "") for row in result.requirements)
+    assert any(row["skill"] == "Python" for row in result.requirements)
+
+
+def test_body_paragraph_is_not_a_requirement_without_a_bullet():
+    jd = parse_jd(
+        "We build Python services for customers and care deeply about tests, "
+        "security, and distributed systems across the whole platform."
+    )
+    assert jd.requirements == []
+
+
 def test_what_we_require_and_technologies_headings_are_parsed():
     jd = parse_jd(
         """The Role
@@ -252,3 +301,59 @@ def test_comp_policy_penalizes_nyc_below_floor():
 
     assert result.meta["comp"]["verdict"] == "below_floor"
     assert result.meta["pursuit"] == round(result.score - 20, 1)
+
+
+def test_or_clause_uses_best_match_and_does_not_gap_unmet_alternatives():
+    result = coverage(
+        [
+            {
+                "text": "Proficiency in Java, Rust, Scala, C++, or C.",
+                "skill": "Java",
+                "skills": ["Java", "Rust", "Scala", "C++", "C"],
+                "importance": "must",
+            }
+        ],
+        ["C++"],
+        SkillGraph(),
+        prose_credit=0.0,
+        evidence_direct=True,
+    )
+
+    assert result.coverage == 1.0
+    assert result.rows[0].skill == "C++"
+    assert result.rows[0].gap is False
+    assert "Java" not in result.gaps
+
+
+def test_unparsed_rows_are_reported_but_not_in_the_denominator():
+    result = coverage(
+        [
+            {"text": "Python", "skill": "Python", "importance": "must"},
+            {"text": "Excellent communication skills", "skill": None, "importance": "must"},
+        ],
+        ["Python"],
+        SkillGraph(),
+        prose_credit=0.0,
+        evidence_direct=True,
+    )
+
+    assert result.coverage == 1.0
+    assert next(row for row in result.rows if row.matched_by == "unparsed").weight == 0.0
+
+
+def test_direct_skills_list_evidence_is_thin_not_a_missing_gap():
+    result = coverage(
+        [{"text": "Python", "skill": "Python", "importance": "must"}],
+        ["Python"],
+        SkillGraph(),
+        {"Python": 0.4},
+        prose_credit=0.0,
+        evidence_direct=True,
+    )
+
+    row = result.rows[0]
+    assert row.credit == 0.4
+    assert row.matched_by == "direct"
+    assert row.gap is False
+    assert row.thin is True
+    assert result.gaps == []

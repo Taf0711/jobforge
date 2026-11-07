@@ -103,7 +103,14 @@ class JD:
 
     @property
     def must_skills(self) -> list[str]:
-        return list(dict.fromkeys(r["skill"] for r in self.requirements if r.get("importance") == "must" and r.get("skill")))
+        return list(
+            dict.fromkeys(
+                skill
+                for row in self.requirements
+                if row.get("importance") == "must"
+                for skill in (row.get("skills") or ([row["skill"]] if row.get("skill") else []))
+            )
+        )
 
 
 def _heading(line: str) -> str | None:
@@ -171,6 +178,18 @@ def _bullets(block: str) -> list[str]:
             out.append(BULLET.sub("", line).strip())
         elif len(line) > 40 and not line.endswith(":"):
             out.append(line)
+    return out
+
+
+def _strict_bullets(block: str) -> list[str]:
+    """Only actual bullets; body paragraphs are not requirements."""
+    out: list[str] = []
+    for raw in block.splitlines():
+        line = raw.strip()
+        if BULLET.match(line):
+            text = BULLET.sub("", line).strip()
+            if text:
+                out.append(text)
     return out
 
 
@@ -265,12 +284,14 @@ def parse_jd(
                     requirement_lines.append((bullet, importance))
 
     if not any(importance == "must" for _, importance in requirement_lines):
-        for bullet in _bullets(sections.get("body", "")):
+        # A paragraph in the body is not a requirement just because it mentions
+        # a skill. Require an actual bullet; recognized requirements sections
+        # above may still use paragraph lines.
+        for bullet in _strict_bullets(sections.get("body", "")):
             if _is_requirement_line(bullet, body=True):
                 requirement_lines.append((bullet, "must"))
 
     requirements: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
     seen_lines: set[tuple[str, str]] = set()
     for line, importance in requirement_lines:
         line_key = (" ".join(line.lower().split()), importance)
@@ -283,14 +304,18 @@ def parse_jd(
                 {"text": line[:500], "skill": None, "importance": importance, "kind": "prose"}
             )
             continue
-        for skill in skills[:3]:
-            key = (skill, importance)
-            if key in seen:
-                continue
-            seen.add(key)
-            requirements.append(
-                {"text": line[:500], "skill": skill, "importance": importance, "kind": "skill"}
-            )
+        # One clause is one row. "Java, Rust, Scala, C++, or C" is an OR-list;
+        # emitting one full-weight row per alternative both double-counts and
+        # falsely marks unmet alternatives as gaps.
+        requirements.append(
+            {
+                "text": line[:500],
+                "skill": skills[0],
+                "skills": skills,
+                "importance": importance,
+                "kind": "skill",
+            }
+        )
 
     must_text = "\n".join(line for line, importance in requirement_lines if importance == "must")
     nice_text = "\n".join(line for line, importance in requirement_lines if importance == "nice")

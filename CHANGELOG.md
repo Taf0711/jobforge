@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.5 — scoring integrity fixes (2026-11-07)
+
+- Unparsed prose requirements stay visible but no longer contribute weight to
+  the calibrated coverage denominator.
+- One requirement clause is one row: OR lists such as "Java, Rust, Scala, C++,
+  or C" use the best matching alternative instead of emitting one full-weight
+  row per alternative.
+- Requirement parsing uses only the job description; title, company, and
+  location are hints, not skill evidence. Body paragraphs without a bullet or
+  a recognized requirements section no longer become must-have rows.
+- `Spring 2027` and "go to market" are context-guarded, like the existing C/R
+  homonym guards.
+- Direct skills-list-only evidence is reported as thin (`thin: true`) rather
+  than a missing gap; missing skills remain gaps.
+- Sparse requirement sets (one parsed clause plus unparsed prose) receive the
+  existing thin-JD penalty. Title relevance falls back to the profile's recent
+  titles/headline when preferences do not list target titles.
+- Tests: **569 passed**; audit **0 high / 0 medium**; decisions **14/14**;
+  adapter eval and offline e2e **ok**.
+
 ## 0.6.4 — known-ATS board selection and full Lever descriptions (2026-11-07)
 
 - `jobforge_scan` now accepts explicit board selectors for the implemented

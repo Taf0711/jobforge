@@ -58,7 +58,24 @@ def extract_skills(text: str) -> list[str]:
         if name == "R":
             if not re.search(r"R programming|R language|RStudio|\bR\b\s*[,/]", text):
                 continue
-        found = len(_pattern(name).findall(text))
+        scan_text = text
+        if name == "Spring":
+            # "Spring 2027" is a graduation date, not the Java framework.
+            scan_text = re.sub(
+                r"\bSpring\s+(?:19|20)\d{2}\b|\bSpring\s+(?:semester|term|quarter|break|cohort|season)\b",
+                " ",
+                scan_text,
+                flags=re.IGNORECASE,
+            )
+        if name == "Go":
+            # "Go to market" / "go-to-market" is prose, not the Go language.
+            scan_text = re.sub(
+                r"\bGo(?:-to-market|\s+to\s+(?:market|definition|production|live|ahead|back|through|forward))\b",
+                " ",
+                scan_text,
+                flags=re.IGNORECASE,
+            )
+        found = len(_pattern(name).findall(scan_text))
         if found:
             canon = canonical(name)
             counts[canon] = counts.get(canon, 0) + found
@@ -75,6 +92,8 @@ class CoverageRow:
     weight: float
     matched_by: str
     gap: bool
+    skills: list[str] = field(default_factory=list)
+    thin: bool = False
 
 
 @dataclass
@@ -94,6 +113,8 @@ class CoverageResult:
                 "weight": r.weight,
                 "matched_by": r.matched_by,
                 "gap": r.gap,
+                "thin": r.thin,
+                "skills": list(r.skills),
             }
             for r in self.rows
         ]
@@ -150,46 +171,66 @@ def coverage(
     total_weight = 0.0
     total_credit = 0.0
     gaps: list[str] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[tuple[str, ...], str]] = set()
 
     for req in requirements:
         text = str(req.get("text") or "").strip()
-        skill = req.get("skill")
-        skill = canonical(skill) if skill else None
+        raw_skills = req.get("skills")
+        if not raw_skills:
+            raw_skills = [req.get("skill")] if req.get("skill") else []
+        clause_skills = list(
+            dict.fromkeys(
+                canonical(str(item)) for item in raw_skills if str(item).strip()
+            )
+        )
         importance = str(req.get("importance") or "must").lower()
         if importance == "context":
             continue
-        if skill:
-            key = (skill, importance)
-            if key in seen:
-                continue
+        key = (tuple(sorted(clause_skills)), importance)
+        if clause_skills and key in seen:
+            continue
+        if clause_skills:
             seen.add(key)
         weight = 1.0 if importance == "must" else 0.4
-        if not skill:
+        if not clause_skills:
             # Unparseable prose is reported in the table but cannot be verified
-            # against the profile. New scoring gives it no positive credit; the
-            # legacy path keeps the old neutral-credit calibration.
+            # against the profile. New scoring removes it from the denominator;
+            # the legacy path keeps the old neutral-credit calibration.
+            weight = 1.0 if prose_credit > 0 else 0.0
             credit, matched_by = max(0.0, min(1.0, prose_credit)), "unparsed"
+            skill = None
+            gap = False
+            thin = False
         else:
-            credit, matched_by = graph.partial_credit(skill, owned)
-            # Direct credit is discounted only in evidence-aware scoring;
-            # transfer credit is always discounted by the evidence behind the
-            # skill that earned it. Otherwise an adjacent skill with weak
-            # evidence can outrank the directly named skill.
-            evidence_skill = skill
-            if matched_by.startswith(("adjacent:", "edge:")):
-                evidence_skill = matched_by.split(":", 1)[1]
-            if credit > 0 and (matched_by != "direct" or evidence_direct):
-                source_evidence = evidence.get(evidence_skill)
-                if source_evidence is not None:
-                    credit *= max(0.0, min(1.0, source_evidence))
-            if credit == 0 and skill in owned:
-                credit = 1.0
+            best: tuple[float, str, str] | None = None
+            for candidate in clause_skills:
+                credit, matched_by = graph.partial_credit(candidate, owned)
+                # Direct credit is discounted only in evidence-aware scoring;
+                # transfer credit is always discounted by the evidence behind
+                # the skill that earned it. Otherwise an adjacent skill with
+                # weak evidence can outrank the directly named skill.
+                evidence_skill = candidate
+                if matched_by.startswith(("adjacent:", "edge:")):
+                    evidence_skill = matched_by.split(":", 1)[1]
+                if credit > 0 and (matched_by != "direct" or evidence_direct):
+                    source_evidence = evidence.get(evidence_skill)
+                    if source_evidence is not None:
+                        credit *= max(0.0, min(1.0, source_evidence))
+                if credit == 0 and candidate in owned:
+                    credit = 1.0
+                option = (credit, candidate, matched_by)
+                if best is None or option[0] > best[0] or (
+                    option[0] == best[0] and matched_by == "direct" and best[2] != "direct"
+                ):
+                    best = option
+            assert best is not None
+            credit, skill, matched_by = best
+            gap = credit == 0.0 if evidence_direct else credit < 0.5
+            thin = 0.0 < credit < 0.5
+            if gap and skill:
+                gaps.append(skill)
         total_weight += weight
         total_credit += weight * credit
-        gap = credit < 0.5
-        if gap and skill:
-            gaps.append(skill)
         rows.append(
             CoverageRow(
                 requirement=text or (skill or ""),
@@ -199,6 +240,8 @@ def coverage(
                 weight=weight,
                 matched_by=matched_by,
                 gap=gap,
+                skills=clause_skills,
+                thin=thin,
             )
         )
 
