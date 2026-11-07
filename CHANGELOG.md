@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.6 — title and sparse-requirement calibration (2026-11-07)
+
+- Title relevance now requires a software-adjacent title token for the 0.85
+  adjacency band; non-software roles (sales/support/IT operations) fall to the
+  0.50 outside-target band instead of inheriting credit from the word
+  "engineer".
+- Sparse-JD penalty is limited to one parsed clause with fewer than three
+  parsed skills. A rich OR clause such as Palantir's language list remains a
+  real match instead of being discarded as sparse.
+- Gates: **569 passed**; audit **0 high / 0 medium**; decisions **14/14**;
+  adapter eval and offline e2e **ok**.
+
 ## 0.6.5 — scoring integrity fixes (2026-11-07)
 
 - Unparsed prose requirements stay visible but no longer contribute weight to

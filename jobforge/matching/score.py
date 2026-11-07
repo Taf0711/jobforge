@@ -165,6 +165,11 @@ TITLE_GENERIC = {
     "fullstack", "full-stack", "i", "ii", "iii", "and", "the", "of", "at", "for",
 }
 HEAD_NOUNS = {"engineer", "developer", "analyst", "scientist", "designer", "manager", "architect"}
+SOFTWARE_TITLE_TOKENS = {
+    "software", "backend", "frontend", "fullstack", "full-stack", "data", "platform",
+    "infrastructure", "systems", "security", "cloud", "devops", "site", "reliability",
+    "mobile", "embedded", "web", "developer", "machine", "learning", "ai", "api",
+}
 
 
 def _title_gate(
@@ -208,9 +213,9 @@ def _title_gate(
         }
         if wanted_tokens and wanted_tokens & title_tokens:
             return 1.0, f"Title alignment: {job.title}"
-    if title_tokens & HEAD_NOUNS:
+    if title_tokens & HEAD_NOUNS and title_tokens & SOFTWARE_TITLE_TOKENS:
         return 0.85, f"Title is adjacent to your targets: {job.title}"
-    return 0.60, f"Title is outside your target families: {job.title}"
+    return 0.50, f"Title is outside your target families: {job.title}"
 
 
 def _evidence(profile: Profile) -> dict[str, float]:
@@ -405,6 +410,7 @@ def score_job(
     sparse_jd = (
         scoring_v2
         and len(parsed_rows) < 2
+        and len(parsed_skills) < 3
         and len(jd.requirements) > len(parsed_rows)
     )
     description = job.description or ""
