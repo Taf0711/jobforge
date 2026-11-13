@@ -56,9 +56,18 @@ fit = coverage × gate survival × thin/lead-only penalty × 100
 Years are resolved from an explicit profile/preference value or a conservative
 estimate from dated non-internship experience. Unset is unknown: it does not
 multiply the score, and the match reports the unknown instead of treating it as
-zero. Quick scan caps over-level, unknown, and unparsed year rows so they cannot
+zero. The same rule applies to citizenship, ITAR eligibility, and clearance
+eligibility: unset adds a gap instead of zeroing the role; an explicit No
+applies the hard gate.
+
+Quick scan caps over-level, unknown, and unparsed year rows so they cannot
 present as "strong" before deep scoring. Location is a risk/gap and a pursuit
 modifier, not a fit knockout. Every match stores reasons, gaps, and a per-requirement table. Scan ranking and deep fit are separate; scanning does not deep-score every row.
+
+The parsed JD retains its sectioned text. `matching/retrieval.py` adds local,
+section-aware lexical retrieval over the complete posting for the built-in agent
+and MCP `get_job`, so context questions do not depend on a truncated prefix or a
+model provider.
 
 ### Tailor
 
@@ -82,8 +91,20 @@ apply_url → ATS detect → persistent Chromium → adapter fill
 ### Track
 
 ```text
-IMAP poll → verification codes / replies → classify → event + status
+IMAP poll (read-only, BODY.PEEK[])  ─┐
+host-agent connector → MCP ingest ──┤
+                                    └→ dedupe
+                                       → company/role/sender/ATS/URL match
+                                         (ambiguous stays unlinked)
+                                       → conservative category
+                                       → forward-only status transition + event
+                                       → tracker timeline + inbox review queue
 ```
+
+Automatic status changes require a 60/100 match or a manual link. `offer`,
+`rejected`, `failed`, and `withdrawn` are terminal. The password lives in the
+OS keychain or a `0600` file, never in config or SQLite. See
+`docs/41-email-tracker.md`.
 
 ## Trust boundaries
 

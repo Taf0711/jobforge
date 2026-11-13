@@ -1,65 +1,60 @@
 // Resume in Typst — resume-forge visual language.
-// Data comes from data.json; the layout mirrors the refined base resume.
+// Data comes from data.json; spacing is explicit so the renderer can fill the
+// page instead of leaving a blank band at the bottom.
 
 #let d = json("data.json")
+#let st = d.at("style", default: (:))
+#let fs = st.at("font_size", default: 11) * 1pt
+#let leading = st.at("leading", default: 0.35)
+#let secgap = st.at("section_gap", default: 12) * 1pt
+#let entrygap = st.at("entry_gap", default: 7) * 1pt
+#let bulletgap = st.at("bullet_gap", default: 3) * 1pt
 #let has(x) = x != none and x != ""
 #set document(title: d.name + " Resume")
 #set page(
   paper: "us-letter",
   margin: (top: 0.12in, bottom: 0.12in, left: 0.2in, right: 0.2in),
 )
-#set text(font: "New Computer Modern", size: 11pt)
-#set par(justify: false, leading: 0.28em)
+#set text(font: "New Computer Modern", size: fs)
+#set par(justify: false, leading: leading * 1em, spacing: 0.6em)
 
-#let section(title) = {
-  v(6pt)
-  text(weight: "regular", size: 10pt, smallcaps(title))
-  v(-9pt)
+#let section(title) = block(above: secgap, below: 4pt, {
+  text(weight: "regular", size: fs - 1pt, smallcaps(title))
+  v(2pt)
   line(length: 100%, stroke: 0.5pt)
-  v(-5pt)
-}
+})
 
-#let subheading(title, date, subtitle, location) = {
-  v(5pt)
+#let subheading(title, date, subtitle, location) = block(
+  above: entrygap,
+  below: 0pt,
   grid(
     columns: (1fr, auto),
-    align: (left, right),
+    align: (left + horizon, right + horizon),
+    row-gutter: 1.5pt,
     text(weight: "bold", title),
     text(date),
-  )
-  v(-7pt)
-  grid(
-    columns: (1fr, auto),
-    align: (left, right),
-    text(style: "italic", size: 9pt, subtitle),
-    text(style: "italic", size: 9pt, location),
-  )
-  v(-2pt)
-}
+    text(style: "italic", size: fs - 2pt, subtitle),
+    text(style: "italic", size: fs - 2pt, location),
+  ),
+)
 
-#let project-heading(p) = {
-  v(4pt)
-  text(size: 9.5pt)[
-    #strong(p.name)
-    #if has(p.tech_line) [ | #emph(p.tech_line) ]
-    #if has(p.url) [ | #link(p.url)[GitHub] ]
-  ]
-  v(-2pt)
-}
+#let project-heading(p) = block(above: entrygap, below: 0pt, text(size: fs - 1.5pt)[
+  #strong(p.name)
+  #if has(p.tech_line) [ | #emph(p.tech_line) ]
+  #if has(p.url) [ | #link(p.url)[GitHub] ]
+])
 
-#let items(..values) = {
-  v(-3pt)
+#let items(..values) = block(above: 0pt, below: 0pt, {
   for item in values.pos() {
     grid(
       columns: (7pt, 1fr),
-      align: (right, left),
-      text(size: 9pt, "•"),
-      h(2pt) + text(size: 9pt, item),
+      align: (right + top, left + top),
+      text(size: fs - 2pt, "•"),
+      text(size: fs - 2pt, item),
     )
-    v(-3.5pt)
+    v(bulletgap)
   }
-  v(-3pt)
-}
+})
 
 #let daterange(e) = if has(e.start) and has(e.end) {
   e.start + " - " + e.end
@@ -71,9 +66,9 @@
 
 // Header
 #align(center)[
-  #text(weight: "bold", size: 20pt, smallcaps(d.name))
-  #v(-5pt)
-  #text(size: 10pt)[
+  #text(weight: "bold", size: fs + 9pt, smallcaps(d.name))
+  #v(-3pt)
+  #text(size: fs - 1pt)[
     #for (i, item) in d.header.enumerate() [
       #if i > 0 [ | ]
       #if has(item.url) [#link(item.url)[#underline[#item.text]]] else [#item.text]
@@ -81,11 +76,18 @@
   ]
 ]
 
+// Summary
+#if has(d.summary) [
+  #section("Summary")
+  #text(size: fs - 1.5pt, d.summary)
+]
+
 // Education
 #if d.education.len() > 0 [
   #section("Education")
   #for e in d.education [
     #subheading(e.institution, daterange(e), e.degree_line, e.location)
+    #v(7pt, weak: false)
     #if e.courses.len() > 0 [
       #items([Relevant Courses: #e.courses.join(", ")])
     ]
@@ -97,6 +99,7 @@
   #section("Experience")
   #for e in d.experience [
     #subheading(e.company, daterange(e), e.title, e.location)
+    #v(7pt, weak: false)
     #if e.bullets.len() > 0 [
       #items(..e.bullets)
     ]
@@ -108,6 +111,7 @@
   #section("Projects")
   #for p in d.projects [
     #project-heading(p)
+    #v(7pt, weak: false)
     #if p.bullets.len() > 0 [
       #items(..p.bullets)
     ]
@@ -117,9 +121,8 @@
 // Technical Skills
 #if d.skill_groups.len() > 0 [
   #section("Technical Skills")
-  #v(-3pt)
-  #set par(spacing: 0.22em)
-  #text(size: 8pt)[
+  #set par(spacing: 0.3em)
+  #text(size: fs - 3pt)[
     #for group in d.skill_groups [
       #strong(group.label): #group.items.join(", ")
       #linebreak()

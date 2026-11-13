@@ -29,7 +29,9 @@
         <a href="/profiles" class="{{ 'active' if request.url.path.startswith('/profiles') else '' }}"{% if request.url.path.startswith('/profiles') %} aria-current="page"{% endif %}>Profiles</a>
         <a href="/applications" class="{{ 'active' if request.url.path.startswith('/applications') else '' }}"{% if request.url.path.startswith('/applications') %} aria-current="page"{% endif %}>Applications</a>
         <a href="/runs" class="{{ 'active' if request.url.path.startswith('/runs') else '' }}"{% if request.url.path.startswith('/runs') %} aria-current="page"{% endif %}>Runs</a>
-        <a href="/inbox" class="{{ 'active' if request.url.path.startswith('/inbox') else '' }}"{% if request.url.path.startswith('/inbox') %} aria-current="page"{% endif %}>Inbox</a>
+        <a href="/inbox" class="nav-with-badge {{ 'active' if request.url.path.startswith('/inbox') else '' }}"{% if request.url.path.startswith('/inbox') %} aria-current="page"{% endif %}>
+          Inbox{% if email_review_count %}<span class="nav-badge">{{ email_review_count }}</span>{% endif %}
+        </a>
         <a href="/answers" class="{{ 'active' if request.url.path.startswith('/answers') else '' }}"{% if request.url.path.startswith('/answers') %} aria-current="page"{% endif %}>Answers</a>
         <a href="/autopilot" class="{{ 'active' if request.url.path.startswith('/autopilot') else '' }}"{% if request.url.path.startswith('/autopilot') %} aria-current="page"{% endif %}>Autopilot</a>
         {% if features.github_connections %}<a href="/connections" class="{{ 'active' if request.url.path.startswith('/connections') else '' }}"{% if request.url.path.startswith('/connections') %} aria-current="page"{% endif %}>GitHub</a>{% endif %}

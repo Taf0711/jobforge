@@ -10,7 +10,7 @@ The optional dashboard is a local review console, not a separate job-search app.
 - **Score** fit as skill coverage × hard-gate survival, with reasons, gaps, and a requirement table.
 - **Tailor** a one-page Typst resume from verified facts. No invented employers, dates, metrics, skills, or degrees.
 - **Apply** in a persistent Chromium window. It fills the form, screenshots it, and stops for human review.
-- **Track** applications, answers, statuses, events, and optional IMAP replies.
+- **Track** applications, answers, statuses, events, and employer email. IMAP sync matches replies to applications and advances the stage only when the signal is clear. Host agents with a Gmail/Outlook connector can also pass employer messages through the scope-gated `jobforge_ingest_emails` MCP tool, without giving JobForge a mailbox credential.
 - **Connect** to Claude Code, Codex, Pi, Hermes, OMP, or any MCP host through the packaged Agent Skill.
 
 ## What it does not do
@@ -18,6 +18,7 @@ The optional dashboard is a local review console, not a separate job-search app.
 - No captcha solving, Indeed/LinkedIn automation, employer accounts, or password storage.
 - Unattended submission is off by default. Two risk-consented modes exist (`unattended_submit`, `autopilot_submit`), share a 10/day cap, and stop on captcha/2FA/account wall.
 - No invented resume content.
+- No outbound email or mailbox mutation. IMAP sync opens the folder read-only and uses `BODY.PEEK[]`.
 - No cloud account, telemetry, or Node application runtime. The npx package is only an installer.
 
 ## Install into your agent
@@ -63,10 +64,14 @@ Open <http://127.0.0.1:8765>. Windows installs are supported, but native Windows
 npx jobforge                          # install into local agents
 jobforge app                          # open the console
 jobforge scan                         # discover, filter, and quick-score jobs
+jobforge import-url https://...       # fetch, store, and score one job URL
 jobforge jobs --sort scan             # scan-ranked list
 jobforge score --top 20               # deep-score the top scan rows
 jobforge tailor --job 42              # build a resume
+jobforge tailor --job 42 --out-dir .  # also export the PDF into this directory
 jobforge apply --job 42               # fill + review; never submit
+jobforge email poll                   # sync IMAP and advance matched stages
+jobforge email watch --interval 15    # keep syncing without the dashboard
 jobforge autopilot run --limit 5      # sequential, risk-gated pass
 jobforge queue build --limit 10       # supervised queue
 jobforge reparse-profile --dry-run     # preview project/fact refresh from resume
@@ -102,10 +107,15 @@ The quality gate blocks below-threshold, duplicate-company, already-submitted, m
 | `jobforge install doctor --hosts ...` | Verify connections, skills, and config entries |
 | `jobforge app` | Start the local console |
 | `jobforge scan` | Discover, filter, and quick-score jobs |
+| `jobforge import-url <url>` | Fetch, store, and score one public job URL |
 | `jobforge jobs --sort scan` | Show the scan-ranked list |
 | `jobforge score --top 20` | Deep-score selected jobs |
 | `jobforge tailor --job 42` | Generate a tailored resume |
+| `jobforge tailor --job 42 --out-dir .` | Also export the PDF into a directory |
 | `jobforge apply --job 42` | Fill an application in review mode |
+| `jobforge email poll` | Sync IMAP, match replies, and advance stages |
+| `jobforge email status` | Show IMAP readiness and the last sync |
+| `jobforge email watch` | Poll on an interval without the dashboard |
 | `jobforge queue ...` | Build, prepare, and review the supervised queue |
 | `jobforge autopilot run` | Sequential risk-consented pass |
 | `jobforge risk status` | Show consent and daily usage |
@@ -128,6 +138,7 @@ Resume imports default to `resume_import.project_mode: merge`: matching projects
 
 - `docs/03-architecture.md` — modules, data flow, trust boundaries
 - `docs/39-scan.md` — quick scan, filters, and deep fit
+- `docs/41-email-tracker.md` — IMAP matching, status changes, and inbox review
 - `docs/11-queue.md` — supervised queue
 - `docs/12-quality.md` — pre-submit gate
 - `docs/13-risk-consent.md` — unattended submit policy

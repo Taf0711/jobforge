@@ -18,4 +18,4 @@ def test_offline_e2e_smoke_reports_ok() -> None:
     assert verdict["checks"], "expected at least one check"
     assert all(item["passed"] for item in verdict["checks"])
     assert verdict["port"] > 0
-    assert verdict["pdf"].endswith("resume.pdf")
+    assert verdict["pdf"].endswith("_Resume.pdf")

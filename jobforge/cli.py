@@ -650,6 +650,16 @@ def cmd_scan(args) -> int:
     return 0 if not stats.get("errors") or processed else 2
 
 
+def cmd_import_url(args) -> int:
+    cfg, conn = _connect(args)
+    try:
+        _print(services.import_job_url(cfg, conn, args.url))
+        return 0
+    except Exception as exc:  # noqa: BLE001 - one URL failure is user-facing
+        print(f"Import failed: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_score(args) -> int:
     cfg, conn = _connect(args)
     _print(
@@ -665,8 +675,11 @@ def cmd_score(args) -> int:
 
 def cmd_tailor(args) -> int:
     cfg, conn = _connect(args)
+    export_dir = None
+    if getattr(args, "out_dir", None):
+        export_dir = Path(args.out_dir).expanduser().resolve()
     try:
-        _print(services.tailor_job(cfg, conn, args.job))
+        _print(services.tailor_job(cfg, conn, args.job, export_dir=export_dir))
     except Exception as exc:
         print(f"Tailor failed: {exc}", file=sys.stderr)
         return 1
@@ -742,10 +755,50 @@ def cmd_status(args) -> int:
 
 def cmd_email(args) -> int:
     cfg, conn = _connect(args)
+    from .email.credentials import password_source, load_password
     from .email.imap import poll
+    from .email.tracker import last_poll_summary, tracker_overview
+
+    action = getattr(args, "action", "poll")
+    if action == "status":
+        _print(
+            {
+                "enabled": cfg.email.enabled,
+                "configured": bool(
+                    cfg.email.username and load_password(cfg.email)
+                ),
+                "host": cfg.email.host,
+                "folder": cfg.email.folder,
+                "username": cfg.email.username,
+                "password_source": password_source(cfg.email),
+                "auto_poll": cfg.email.auto_poll,
+                "poll_interval_minutes": cfg.email.poll_interval_minutes,
+                "lookback_days": cfg.email.lookback_days,
+                "last_poll": last_poll_summary(conn),
+                "tracker": tracker_overview(conn),
+            }
+        )
+        return 0
+
+    if action == "watch":
+        interval = max(5, int(getattr(args, "interval", 0) or cfg.email.poll_interval_minutes))
+        try:
+            while True:
+                started = time.time()
+                try:
+                    result = poll(cfg.email, conn, limit=getattr(args, "limit", None))
+                    _print(result)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - keep watching after a transient failure
+                    print(f"Email poll failed: {exc}", file=sys.stderr)
+                elapsed = time.time() - started
+                time.sleep(max(1.0, interval * 60 - elapsed))
+        except KeyboardInterrupt:
+            return 0
 
     try:
-        _print(poll(cfg.email, conn))
+        _print(poll(cfg.email, conn, limit=getattr(args, "limit", None)))
     except Exception as exc:
         print(f"Email poll failed: {exc}", file=sys.stderr)
         return 1
@@ -1464,6 +1517,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-quick", action="store_true", help="skip quick scan scoring")
     p.set_defaults(func=cmd_scan)
 
+    p = sub.add_parser("import-url", help="fetch, store, and score one public job URL")
+    p.add_argument("url", help="public http(s) job posting URL")
+    p.set_defaults(func=cmd_import_url)
+
     p = sub.add_parser("score", help="deep-score jobs (all, --top N, or --job ID)")
     p.add_argument("--top", type=int, help="deep-score the top N scan-ranked jobs")
     p.add_argument("--job", type=int, action="append", help="deep-score one job id (repeatable)")
@@ -1471,6 +1528,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("tailor", help="generate a tailored resume for a job")
     p.add_argument("--job", type=int, required=True)
+    p.add_argument(
+        "--out-dir",
+        help="also export the PDF into this directory (for example the agent session cwd)",
+    )
     p.set_defaults(func=cmd_tailor)
 
     p = sub.add_parser("apply", help="fill an application in a headed browser")
@@ -1502,7 +1563,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("email", help="email tools")
-    p.add_argument("action", choices=["poll"])
+    p.add_argument("action", choices=["poll", "status", "watch"])
+    p.add_argument("--interval", type=int, default=0, help="watch interval in minutes")
+    p.add_argument("--limit", type=int, default=None, help="maximum messages per poll")
     p.set_defaults(func=cmd_email)
 
     p = sub.add_parser("code", help="wait for an email verification code")

@@ -119,6 +119,11 @@ email:
   password_env: "JOBFORGE_IMAP_PASSWORD"
   folder: "INBOX"
   lookback_days: 30
+  auto_poll: true
+  poll_interval_minutes: 15
+  max_messages: 200
+  timeout_seconds: 20
+  status_window_days: 60
   verification_domains: []
   verification_senders: []
 

@@ -26,6 +26,11 @@ CLEARANCE_RANK = {
 }
 SENIOR_TITLE = re.compile(r"\b(senior|sr\.?|staff|principal|lead|architect|manager|director|vp|head)\b", re.IGNORECASE)
 INTERN_TITLE = re.compile(r"\b(intern|internship|co-op|coop)\b", re.IGNORECASE)
+ENTRY_TITLE = re.compile(
+    r"\b(?:new\s+grad(?:uate)?|college\s+grad(?:uate)?|early\s+career|"
+    r"entry[- ]level|grad(?:uate)?)\b",
+    re.IGNORECASE,
+)
 
 
 def _profile_degree(profile: Profile) -> str:
@@ -45,6 +50,20 @@ def _profile_degree(profile: Profile) -> str:
         if DEGREE_RANK[rank] > DEGREE_RANK[best]:
             best = rank
     return best
+
+
+def _tri_bool(value: Any) -> bool | None:
+    """Return True/False for an explicit value, or None when unset/unknown."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "1", "y"}:
+        return True
+    if text in {"false", "no", "0", "n"}:
+        return False
+    return None
 
 
 def _profile_clearance(profile: Profile, prefs: Preferences) -> str:
@@ -154,8 +173,10 @@ def _location_gate(
         if wanted in job_loc or job_loc in wanted:
             return 1.0, 1.0, f"Location match: {job.location}", ""
     if prefs.open_to_relocation:
-        return 1.0, 0.6, "Location outside preferred; relocation possible", f"Relocation required: {job.location}"
-    return 1.0, 0.4, "Location outside preferred", f"Location mismatch: {job.location}"
+        # Location is a logistics signal, not a fit knockout. It belongs in the
+        # reasons so the human sees it, but it must not masquerade as a skill gap.
+        return 1.0, 0.6, f"Location outside preferred; relocation possible: {job.location}", ""
+    return 1.0, 0.4, f"Location outside preferred: {job.location}", ""
 
 
 TITLE_GENERIC = {
@@ -164,17 +185,21 @@ TITLE_GENERIC = {
     "associate", "specialist", "remote", "platform", "product", "data", "backend", "frontend",
     "fullstack", "full-stack", "i", "ii", "iii", "and", "the", "of", "at", "for",
 }
-HEAD_NOUNS = {"engineer", "developer", "analyst", "scientist", "designer", "manager", "architect"}
+HEAD_NOUNS = {
+    "engineer", "engineering", "developer", "analyst", "scientist", "designer",
+    "manager", "architect", "technical", "amts", "mts",
+}
 SOFTWARE_TITLE_TOKENS = {
     "software", "backend", "frontend", "fullstack", "full-stack", "data", "platform",
     "infrastructure", "systems", "security", "cloud", "devops", "site", "reliability",
     "mobile", "embedded", "web", "developer", "machine", "learning", "ai", "api",
+    "engineering", "technical", "amts", "mts",
 }
 
 
 def _title_gate(
     job: Job, prefs: Preferences, profile: Profile | None = None
-) -> tuple[float, str]:
+) -> tuple[float, str, str]:
     title = job.title.lower()
     wanted_titles = list(prefs.titles)
     levels = {level.lower() for level in prefs.experience_levels}
@@ -196,14 +221,18 @@ def _title_gate(
                 levels = {"entry", "junior"}
     wants_intern = any("intern" in t.lower() for t in levels)
     if INTERN_TITLE.search(title) and not wants_intern:
-        return 0.50, "Internship title outside your target levels"
+        return (
+            0.50,
+            "Internship title outside your target levels",
+            "Title level mismatch",
+        )
     if SENIOR_TITLE.search(title) and ({"entry", "junior", "internship"} & levels):
-        return 0.50, "Senior title vs. entry/junior target"
+        return 0.50, "Senior title vs. entry/junior target", "Title level mismatch"
     if not wanted_titles:
-        return 1.0, ""
+        return 1.0, "", ""
     for wanted in wanted_titles:
         if wanted.lower().strip() in title:
-            return 1.0, f"Title alignment: {job.title}"
+            return 1.0, f"Title alignment: {job.title}", ""
     title_tokens = {t.lower() for t in re.findall(r"[a-z0-9+#.]+", title) if len(t) > 2}
     for wanted in wanted_titles:
         wanted_tokens = {
@@ -212,16 +241,48 @@ def _title_gate(
             if len(t) > 2 and t.lower() not in TITLE_GENERIC
         }
         if wanted_tokens and wanted_tokens & title_tokens:
-            return 1.0, f"Title alignment: {job.title}"
+            return 1.0, f"Title alignment: {job.title}", ""
     if title_tokens & HEAD_NOUNS and title_tokens & SOFTWARE_TITLE_TOKENS:
-        return 0.85, f"Title is adjacent to your targets: {job.title}"
-    return 0.50, f"Title is outside your target families: {job.title}"
+        if ENTRY_TITLE.search(title) and (not levels or {"entry", "junior"} & levels):
+            return 1.0, f"Title alignment: entry-level {job.title}", ""
+        return 0.85, f"Title is adjacent to your targets: {job.title}", ""
+    reason = f"Title is outside your target families: {job.title}"
+    return 0.50, reason, "Title family mismatch"
+
+
+EVIDENCE_LEVEL_WEIGHTS = {
+    "direct_professional": 1.0,
+    "direct_project": 0.8,
+    "adjacent_professional": 0.7,
+    "adjacent_project_coursework": 0.55,
+    "skills_list_only": 0.3,
+    "interest_only": 0.1,
+    "no_evidence": 0.0,
+}
 
 
 def _evidence(profile: Profile) -> dict[str, float]:
+    """Best evidence weight per skill.
+
+    The profile's curated evidence matrix is authoritative when present: a
+    skill can be marked direct/adjacent even when the one-line resume did not
+    spell it out. Facts then raise the floor, and the plain skills list is the
+    weakest signal rather than an automatic 0.4.
+    """
     out: dict[str, float] = {}
     for skill in profile.skills:
         out[skill] = max(out.get(skill, 0.0), 0.40)  # skills-list-only evidence
+    matrix = profile.evidence or {}
+    for group in (matrix.get("skills") or {}).values():
+        if not isinstance(group, dict):
+            continue
+        for skill, entry in group.items():
+            if not isinstance(entry, dict):
+                continue
+            level = str(entry.get("best_level") or "").strip().lower()
+            weight = EVIDENCE_LEVEL_WEIGHTS.get(level)
+            if weight is not None:
+                out[str(skill)] = max(out.get(str(skill), 0.0), weight)
     for fact in profile.facts:
         section = str(fact.get("section", "")).lower()
         weight = 1.0 if section == "experience" else 0.80
@@ -326,37 +387,68 @@ def score_job(
         if CLEARANCE_RANK.get(have_clearance, 0) >= CLEARANCE_RANK.get(jd.clearance, 0):
             gates.append((1.0, f"Clearance matches: {jd.clearance}", ""))
         else:
-            eligible = bool(profile.work_auth.get("clearance_eligible", False))
-            survival = clearance_survival(active_required=True, eligible=eligible)
-            reason = "Clearance-eligible for a clearance requirement" if eligible else ""
+            eligible = _tri_bool(profile.work_auth.get("clearance_eligible"))
+            if eligible is None:
+                # Unknown is not ineligible. Keep the role scoreable and make
+                # the missing authorization an explicit gap.
+                gates.append(
+                    (
+                        0.35,
+                        "",
+                        f"Clearance required: {jd.clearance} (clearance eligibility not set)",
+                    )
+                )
+            else:
+                survival = clearance_survival(active_required=True, eligible=eligible)
+                reason = "Clearance-eligible for a clearance requirement" if eligible else ""
+                gates.append(
+                    (
+                        survival,
+                        reason,
+                        f"Clearance required: {jd.clearance}"
+                        + ("" if eligible else " (not clearance-eligible)"),
+                    )
+                )
+
+    if jd.citizenship_required:
+        citizen = _tri_bool(profile.work_auth.get("us_citizen"))
+        if citizen is None:
+            gates.append(
+                (
+                    1.0,
+                    "",
+                    "US citizenship required; work authorization is not set",
+                )
+            )
+        else:
+            survival = citizenship_survival(True, citizen)
             gates.append(
                 (
                     survival,
-                    reason,
-                    f"Clearance required: {jd.clearance}"
-                    + ("" if eligible else " (not clearance-eligible)"),
+                    "US citizen — satisfies citizenship requirement" if survival >= 1.0 else "",
+                    "US citizenship required" if survival < 1.0 else "",
                 )
             )
 
-    if jd.citizenship_required:
-        survival = citizenship_survival(True, bool(profile.work_auth.get("us_citizen", False)))
-        gates.append(
-            (
-                survival,
-                "US citizen — satisfies citizenship requirement" if survival >= 1.0 else "",
-                "US citizenship required" if survival < 1.0 else "",
-            )
-        )
-
     if jd.itar_required:
-        survival = itar_survival(True, bool(profile.work_auth.get("itar_eligible", False)))
-        gates.append(
-            (
-                survival,
-                "ITAR-eligible" if survival >= 1.0 else "",
-                "ITAR eligibility required" if survival < 1.0 else "",
+        eligible = _tri_bool(profile.work_auth.get("itar_eligible"))
+        if eligible is None:
+            gates.append(
+                (
+                    1.0,
+                    "",
+                    "ITAR eligibility required; work authorization is not set",
+                )
             )
-        )
+        else:
+            survival = itar_survival(True, eligible)
+            gates.append(
+                (
+                    survival,
+                    "ITAR-eligible" if survival >= 1.0 else "",
+                    "ITAR eligibility required" if survival < 1.0 else "",
+                )
+            )
 
     if jd.gpa_floor is not None:
         raw_gpa = profile.work_auth.get("gpa")
@@ -380,8 +472,8 @@ def score_job(
     loc_gate, relocation_fit, loc_reason, loc_gap = _location_gate(job, jd, prefs)
     gates.append((loc_gate, loc_reason, loc_gap))
 
-    title_gate, title_reason = _title_gate(job, prefs, profile)
-    gates.append((title_gate, title_reason, "" if title_gate >= 0.8 else "Title level mismatch"))
+    title_gate, title_reason, title_gap = _title_gate(job, prefs, profile)
+    gates.append((title_gate, title_reason, title_gap))
 
     gate_salary_min = job.salary_min if job.salary_min is not None else jd.salary_min
     gate_salary_max = job.salary_max if job.salary_max is not None else jd.salary_max

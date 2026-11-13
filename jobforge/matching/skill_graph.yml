@@ -21,9 +21,14 @@ families:
   api_styles:     { partial: 0.50, members: ["REST APIs", GraphQL, gRPC, WebSockets, OpenAPI] }
   testing:        { partial: 0.55, members: [pytest, JUnit, Jest, Playwright, Selenium, Cypress] }
   data_tools:     { partial: 0.50, members: [Pandas, NumPy, Spark, Airflow, dbt, Snowflake, Databricks] }
+  embedded:       { partial: 0.60, members: [Microcontrollers, "NXP Microcontrollers"] }
+  systems_fundamentals: { partial: 0.50, members: [Operating Systems, "Computer Architecture", "Computer Networks", Networking] }
+  technical_writing: { partial: 0.60, members: [Documentation, "Technical Writing", Confluence] }
 
 edges:
   - [C, "Operating Systems", 0.50]
+  - [C, Microcontrollers, 0.40]
+  - ["C++", Microcontrollers, 0.40]
   - ["C++", "Operating Systems", 0.50]
   - ["C/C++", "Operating Systems", 0.50]
   - [Go, "Distributed Systems", 0.40]

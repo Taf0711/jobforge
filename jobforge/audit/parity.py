@@ -21,7 +21,11 @@ CHECKS: list[tuple[str, str, str]] = [
     ("Job feed", "jobforge/sources/registry.py", "fetch_configured"),
     ("Feed filters", "jobforge/db.py", "def list_jobs"),
     ("Match score", "jobforge/matching/score.py", "def score_job"),
-    ("Swipe/apply UI", "jobforge/web/templates/job_detail.html", "Fill application"),
+    (
+        "Swipe/apply UI",
+        "jobforge/web/templates/job_detail.html",
+        'action="/jobs/{{ job.id }}/apply"',
+    ),
     ("Saved jobs", "jobforge/db.py", "CREATE TABLE IF NOT EXISTS saved_jobs"),
     ("Job detail", "jobforge/web/templates/job_detail.html", "Job description"),
     ("Paste a URL", "jobforge/sources/direct.py", "def fetch_job_url"),

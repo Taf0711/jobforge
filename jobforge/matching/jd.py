@@ -28,7 +28,19 @@ OTHER_HEADINGS = {
 }
 
 BULLET = re.compile(r"^\s*(?:[•●▪◦*\-–—]|\d+[.)])\s+")
+SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9(\"'])")
+THEMATIC_SECTIONS = {"requirements", "preferred", "responsibilities"}
+INLINE_HEADINGS = sorted(
+    REQUIREMENT_HEADINGS | PREFERRED_HEADINGS | RESPONSIBILITY_HEADINGS,
+    key=len,
+    reverse=True,
+)
+INLINE_HEADING = re.compile(
+    r"(^|(?<=[.\n]))[ \t]*(" + "|".join(re.escape(h) for h in INLINE_HEADINGS) + r")[ \t]*:",
+    re.IGNORECASE | re.MULTILINE,
+)
 YEARS = re.compile(r"(\d{1,2})\s*\+?\s*(?:years?|yrs?)(?:\s+of)?", re.IGNORECASE)
+AGE_OF_MAJORITY = re.compile(r"\b\d{1,2}\s*(?:\+|plus)?\s*years?\s+of\s+age\b", re.IGNORECASE)
 YEARS_RANGE = re.compile(
     r"(\d{1,2})\s*(?:-|–|—|to)\s*(\d{1,2})\s*\+?\s*(?:years?|yrs?)",
     re.IGNORECASE,
@@ -38,7 +50,35 @@ COMPANY_AGE = re.compile(
     r"founded\s+\d{1,2}\s+years?\s+ago",
     re.IGNORECASE,
 )
-DEGREE = re.compile(r"\b(ph\.?d|doctorate|master'?s?|m\.?s\.?|bachelor'?s?|b\.?s\.?|b\.?a\.?|associate'?s?)\b", re.IGNORECASE)
+# Degree detection is deliberately structural. "Master our development process"
+# and "master data management" are prose, not a master's-degree requirement.
+PHD_DEGREE = re.compile(r"\b(?:ph\.?\s?d\.?|doctorate|doctoral(?:\s+degree)?)\b", re.IGNORECASE)
+BACHELOR_DEGREE = re.compile(
+    r"\b(?:bachelor(?:'s|’s|s)?|b\.?\s?sc?\.?|b\.?\s?[sa]\.?)\b",
+    re.IGNORECASE,
+)
+ASSOCIATE_DEGREE = re.compile(
+    r"\bassociate(?:'s|’s)?\s+(?:degree|of)\b", re.IGNORECASE
+)
+MASTER_DEGREE = re.compile(
+    r"\bmaster(?:'s|’s|s)\b|\bmaster\s+(?:degree|of|in)\b", re.IGNORECASE
+)
+MASTER_DOTTED = re.compile(r"\bm\.\s?(?:s|a|sc)\.", re.IGNORECASE)
+MASTER_BARE = re.compile(r"\b(?:ms|ma|msc)\b", re.IGNORECASE)
+DEGREE_CONTEXT = re.compile(
+    r"\b(?:degree|major|field|science|engineering|computer|arts|business)\b",
+    re.IGNORECASE,
+)
+MASTER_ABBREV_CONTEXT = re.compile(r"\b(?:ms|ma|msc)\b\s+(?:in|of)\b", re.IGNORECASE)
+DEGREE_PREFERENCE_ONLY = re.compile(
+    r"\b(?:preferred|nice\s+to\s+have|a\s+plus|bonus|desired|good\s+to\s+have)\b",
+    re.IGNORECASE,
+)
+DEGREE_REQUIREMENT_MARKER = re.compile(
+    r"\b(?:required|require|must|minimum|need|needs|should\s+have|have\s+a|possess|"
+    r"or\s+equivalent)\b",
+    re.IGNORECASE,
+)
 CLEARANCE = re.compile(r"\b(ts/sci|top secret|secret clearance|security clearance|public trust|polygraph)\b", re.IGNORECASE)
 GPA = re.compile(r"(?:minimum\s+|min\.?\s+)?gpa\s+(?:of\s+)?(\d\.\d+)", re.IGNORECASE)
 CITIZENSHIP = re.compile(r"\bu\.?s\.?\s+citizen\b|\bus\s+citizen\b|\bcitizenship\s+required\b", re.IGNORECASE)
@@ -64,7 +104,7 @@ BOILERPLATE = re.compile(
 REQUIREMENT_CUE = re.compile(
     r"\b(?:experienc\w*|proficien\w*|knowledg\w*|familiar\w*|abilit\w*|skill\w*|"
     r"background|understand\w*|strong|excellent|solid|comfort\w*|track\s+record|"
-    r"demonstrat\w*|hands-on|degree|bachelor\w*|master\w*|phd|minimum|must|requir\w*|"
+    r"demonstrat\w*|hands-on|degree|bachelor\w*|phd|minimum|must|requir\w*|"
     r"at\s+least|you\s+have|you\s+are|you[’']ll\s+need|you\s+will\s+need|we\s+require|"
     r"we\s+need|looking\s+for|preferred|plus|design\w*|develop\w*|build\w*|writ\w*|"
     r"implement\w*|maintain\w*|automat\w*|debug\w*|test\w*|deploy\w*|operat\w*|"
@@ -75,7 +115,7 @@ REQUIREMENT_CUE = re.compile(
 BODY_REQUIREMENT_CUE = re.compile(
     r"\b(?:experienc\w*|proficien\w*|knowledg\w*|familiar\w*|abilit\w*|skill\w*|"
     r"background|understand\w*|strong|excellent|solid|comfort\w*|track\s+record|"
-    r"demonstrat\w*|hands-on|degree|bachelor\w*|master\w*|phd|minimum|must|requir\w*|"
+    r"demonstrat\w*|hands-on|degree|bachelor\w*|phd|minimum|must|requir\w*|"
     r"at\s+least|you\s+have|you\s+are|you[’']ll\s+need|you\s+will\s+need)\b",
     re.IGNORECASE,
 )
@@ -93,6 +133,7 @@ class JD:
     years_required: float | None = None
     years_mentioned: bool = False
     degree: str | None = None
+    sections: dict[str, str] = field(default_factory=dict)
     clearance: str | None = None
     sponsorship: bool | None = None
     gpa_floor: float | None = None
@@ -137,7 +178,8 @@ def _heading(line: str) -> str | None:
     ):
         return "preferred"
     if re.match(
-        r"^(responsibilities|what you'?ll (be doing|do)|what you will (be doing|do)|the role|"
+        r"^(responsibilities|key (?:job )?responsibilities|primary responsibilities|"
+        r"what you'?ll (be doing|do)|what you will (be doing|do)|the role|"
         r"about the role|in this role|your impact|duties|day to day|day-to-day)$",
         key,
     ):
@@ -166,6 +208,22 @@ def split_jd_sections(text: str) -> dict[str, str]:
             continue
         sections.setdefault(current, []).append(line)
     return {k: "\n".join(v).strip() for k, v in sections.items()}
+
+
+def promote_inline_headings(text: str) -> str:
+    """Put headings that were flattened into a paragraph back on their own line.
+
+    Many sources deliver a posting as one line ("... impact. BASIC QUALIFICATIONS:
+    Experience with ..."), which hides every section from :func:`split_jd_sections`.
+    Only headings that a sentence boundary or line start introduces are promoted.
+    """
+    if not text:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        return f"{match.group(1)}\n{match.group(2)}:\n"
+
+    return INLINE_HEADING.sub(repl, text)
 
 
 def _bullets(block: str) -> list[str]:
@@ -197,8 +255,15 @@ def _all_lines(block: str) -> list[str]:
     out: list[str] = []
     for raw in block.splitlines():
         line = BULLET.sub("", raw.strip()).strip()
-        if line and not line.endswith(":"):
+        if not line or line.endswith(":"):
+            continue
+        if BULLET.match(raw) or len(line) < 40:
             out.append(line)
+            continue
+        # Flattened postings keep a whole requirements block on one line.
+        # One clause is one row, so split the paragraph back into sentences.
+        parts = [part.strip() for part in SENTENCE_SPLIT.split(line) if part.strip()]
+        out.extend(parts if len(parts) > 1 else [line])
     return out
 
 
@@ -212,7 +277,9 @@ def mentions_years(text: str) -> bool:
     """
     for raw in (text or "").splitlines():
         line = BULLET.sub("", raw.strip()).strip()
-        if not line or COMPANY_AGE.search(line) or BOILERPLATE.match(line):
+        if not line or COMPANY_AGE.search(line) or AGE_OF_MAJORITY.search(line):
+            continue
+        if BOILERPLATE.match(line):
             continue
         if YEARS.search(line):
             return True
@@ -233,7 +300,7 @@ def _is_requirement_line(line: str, *, body: bool = False) -> bool:
         return False
     if (
         YEARS.search(text)
-        or DEGREE.search(text)
+        or _degree_levels(text)
         or CLEARANCE.search(text)
         or GPA.search(text)
         or CITIZENSHIP.search(text)
@@ -248,19 +315,57 @@ def _is_requirement_line(line: str, *, body: bool = False) -> bool:
     return bool(cue.search(text))
 
 
+def _has_degree_context(text: str) -> bool:
+    """True when a bare MS/MA/MSc abbreviation is used as a degree."""
+    return (
+        bool(DEGREE_CONTEXT.search(text))
+        or bool(MASTER_ABBREV_CONTEXT.search(text))
+        or any(
+            pattern.search(text)
+            for pattern in (PHD_DEGREE, BACHELOR_DEGREE, ASSOCIATE_DEGREE, MASTER_DOTTED)
+        )
+    )
+
+
+def _degree_levels(text: str) -> set[str]:
+    """Return every degree level mentioned in one clause or line."""
+    levels: set[str] = set()
+    if PHD_DEGREE.search(text):
+        levels.add("phd")
+    if BACHELOR_DEGREE.search(text):
+        levels.add("bachelors")
+    if ASSOCIATE_DEGREE.search(text):
+        levels.add("associates")
+    if MASTER_DEGREE.search(text) or MASTER_DOTTED.search(text):
+        levels.add("masters")
+    elif MASTER_BARE.search(text) and _has_degree_context(text):
+        levels.add("masters")
+    return levels
+
+
 def _degree_level(text: str) -> str | None:
-    m = DEGREE.search(text)
-    if not m:
-        return None
-    value = m.group(1).lower()
-    if "ph.d" in value or "phd" in value or "doctor" in value:
-        return "phd"
-    if "master" in value or value in {"m.s", "ms"}:
-        return "masters"
-    if "bachelor" in value or value in {"b.s", "bs", "b.a", "ba"}:
-        return "bachelors"
-    if "associate" in value:
-        return "associates"
+    """Return the lowest degree floor, ignoring preferred-only clauses.
+
+    A posting may say "Bachelor's required; Master's preferred", which is a
+    bachelor's floor. It may also say only "Master's preferred", which is not
+    a floor at all. Splitting clauses before applying the preference filter
+    keeps both cases correct.
+    """
+    levels: set[str] = set()
+    for raw_line in (text or "").splitlines():
+        for clause in re.split(r";\s*", raw_line):
+            clause = clause.strip()
+            if not clause:
+                continue
+            if (
+                DEGREE_PREFERENCE_ONLY.search(clause)
+                and not DEGREE_REQUIREMENT_MARKER.search(clause)
+            ):
+                continue
+            levels |= _degree_levels(clause)
+    for level in ("associates", "bachelors", "masters", "phd"):
+        if level in levels:
+            return level
     return None
 
 
@@ -273,6 +378,11 @@ def parse_jd(
     text = normalize_text(text or "")
     years_mentioned = mentions_years(text)
     sections = split_jd_sections(text)
+    if not THEMATIC_SECTIONS & sections.keys():
+        promoted = promote_inline_headings(text)
+        if promoted != text:
+            text = promoted
+            sections = split_jd_sections(text)
 
     requirement_lines: list[tuple[str, str]] = []
     for heading, section in sections.items():
@@ -323,6 +433,8 @@ def parse_jd(
 
     year_floors: list[float] = []
     for line in must_text.splitlines():
+        if AGE_OF_MAJORITY.search(line):
+            continue
         ranges = YEARS_RANGE.findall(line)
         if ranges:
             year_floors.extend(min(float(left), float(right)) for left, right in ranges)
@@ -363,6 +475,7 @@ def parse_jd(
         description=text,
         requirements=requirements,
         skills=all_skills,
+        sections=dict(sections),
         years_required=years_required,
         years_mentioned=years_mentioned,
         degree=degree,

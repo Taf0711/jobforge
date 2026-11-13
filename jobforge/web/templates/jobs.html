@@ -9,6 +9,16 @@
   <form method="post" action="/scan/run"><button class="button primary">Scan sources</button></form>
 </section>
 
+<form class="filter-bar" method="post" action="/jobs/import-url" aria-label="Import a job URL">
+  <div class="filter-field search">
+    <label for="job-url">Add a job from a URL</label>
+    <input id="job-url" type="url" name="url" placeholder="https://employer.example/jobs/123" required>
+  </div>
+  <div class="filter-actions">
+    <button class="primary">Fetch and score</button>
+  </div>
+</form>
+
 <form class="filter-bar" method="get" action="/jobs" aria-label="Job filters">
   <div class="filter-field search">
     <label for="jobs-q">Search</label>

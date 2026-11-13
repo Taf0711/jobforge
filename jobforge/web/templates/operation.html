@@ -35,6 +35,7 @@
         <strong>Tailored resume PDF</strong>
         <p>The artifact is attached to the draft application and can be opened before submission.</p>
         <a class="button primary" href="{{ artifact_url }}" target="_blank" rel="noopener">Open tailored resume</a>
+        {% if operation.result and operation.result.export_path %}<p class="muted-small">Exported to <code>{{ operation.result.export_path }}</code></p>{% endif %}
       </div>
       {% else %}
       <div class="operation-preview">
@@ -73,6 +74,7 @@
       <dl class="operation-meta">
         <dt>Requested by</dt><dd>{{ connection.label if connection else operation.connection_id }}</dd>
         <dt>Action</dt><dd>{{ 'Resume render' if operation.action == 'render_resume' else ('Submit application' if operation.action == 'submit_application' else operation.action) }}</dd>
+        {% if operation.export_dir %}<dt>Export to</dt><dd><code>{{ operation.export_dir }}</code></dd>{% endif %}
         <dt>Created</dt><dd>{{ operation.created_at[:16] }}</dd>
         <dt>Expires</dt><dd>{{ operation.expires_at[:16] }}</dd>
         {% if operation.approved_at %}<dt>Approved</dt><dd>{{ operation.approved_at[:16] }}</dd>{% endif %}

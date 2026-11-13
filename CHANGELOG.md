@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.8.2 — JD parsing integrity and full-posting retrieval (2026-11-13)
+
+- Fixed two parser artifacts that collapsed gate survival. Imperative prose such
+  as "Master our development process" is no longer read as a master's-degree
+  floor, and "AMTS"/"College Grad" software titles are no longer reported as a
+  title-level mismatch. Degree detection is structural and returns the lowest
+  required degree; preferred-only degree clauses do not set a floor.
+- Added section-aware retrieval over the complete job description. The built-in
+  agent and MCP `jobforge_get_job` accept `description_query` and
+  `description_limit` for relevant, section-labelled excerpts, plus
+  `description_offset` for paging the raw text. The parser now retains every
+  recognized section, so culture, preferred qualifications, and prose
+  requirements remain addressable instead of being lost behind a truncated
+  prefix or treated as must-haves.
+- Fixed the parity audit's stale "Fill application" needle. The check now
+  verifies the actual apply form action in `job_detail.html`; audit parity is
+  47/47 again.
+- Gates: **624 passed**; audit **47/47**, **0 high / 0 medium**; decisions
+  **14/14**; adapter eval **6/6**; offline e2e **ok**.
+
+## 0.8.1 — host-agent email ingestion (2026-11-13)
+
+- Added `jobforge_ingest_emails` (`email:write`) for host-agent ingestion.
+  An agent that already has a Gmail, Outlook, or other mail connector can pass
+  normalized employer messages to JobForge instead of giving JobForge a mailbox
+  credential. JobForge still performs deterministic classification, matching,
+  dedupe, and forward-only status changes; the host cannot assert a category or
+  application. `apply_status: false` links without changing a stage.
+- Relative paths in `config.yml` now resolve against the config file's
+  directory, not the process cwd. An installed app or host-agent MCP server
+  started from a checkout now reads the same app-home database and connection.
+- Work authorization is now editable in **Profiles → Work authorization** and
+  readable through `jobforge_get_profile` with `section: "work_authorization"`.
+  Unset citizenship, ITAR eligibility, or clearance eligibility adds a gap
+  instead of zeroing the fit; an explicit No still applies the hard gate.
+- Gates: **611 passed**; audit **0 high / 0 medium**; decisions **14/14**.
+
+## 0.8.0 — email-driven application tracker (2026-11-12)
+
+- Added an email-driven application tracker. IMAP polling now matches employer
+  mail to one application using company, role, sender domain, ATS, and job URL
+  signals; ambiguous mail stays unlinked for human review. Confirmation,
+  assessment, interview, offer, and rejection messages advance the stage
+  forward-only, record a timeline event, and set `submitted_at` when the email
+  proves an application exists. The dashboard shows stage provenance, a
+  per-application timeline, an inbox review queue, and a background sync while
+  the dashboard is open. `jobforge email poll|status|watch` covers the CLI.
+  The IMAP password is keychain-first (0600 fallback) and never enters config,
+  SQLite, exports, logs, or templates. Schema v8 adds email match/status
+  provenance and `applications.status_source`.
+- The answer bank now answers yes/no minimum-years screening questions
+  (for example "3+ years of relevant non-internship professional
+  experience?") from the confirmed `years_of_experience` preference.
+  An unconfirmed count stays unresolved for the human.
+- Pending operation requests now transition to `expired` after their TTL
+  passes. The dashboard, operations page, operation polling, and MCP operation
+  reads sweep stale requests so they no longer sit in the approval queue
+  forever.
+- Resume renders can now export a role-named PDF copy into the caller's working
+  directory. `jobforge_request_resume` accepts an absolute `destination_dir`
+  (normally the agent session cwd) and the MCP server defaults to its working
+  directory when it looks like a session workspace. `jobforge tailor --out-dir`
+  exposes the same copy for the CLI. The canonical artifact stays in the
+  JobForge output store for the dashboard and approval trail; the operation
+  result reports `export_path`.
+- Added `jobforge import-url <url>` and a Jobs-page URL form. A human can paste
+  one public posting; JobForge fetches it, stores it, quick-scores it, and
+  deep-scores it. The generic URL parser now recovers company and location from
+  Greenhouse, Workday, and other pages, prefers the job-description container,
+  and strips page chrome such as breadcrumbs and "Back to jobs" from the
+  description.
+- Added the `jobs:write` scope and `jobforge_import_job` MCP tool. A host agent
+  can read a public posting from any site with its own browser or web-fetch
+  tool and import normalized fields. JobForge validates the URL without
+  fetching it, dedupes by canonical fingerprint, stores the job, and
+  quick-scores it for the bound profile. Deep scoring stays separate.
+
+## 0.7.1 — resume courses, page fill, and inline previews (2026-11-12)
+
+- Resume tailoring now preserves the education course list. The PDF parser
+  reads `Relevant Courses:` lines (including wrapped lines), re-imports keep
+  curated courses when the parser cannot see them, and older profiles fall back
+  read-only to their source resume. The profile page shows the parsed education
+  and courses.
+- Resume layout no longer leaves a blank band at the bottom. Spacing is
+  explicit, the summary renders when present, and a one-page fill pass spreads
+  leftover height into leading and section gaps without adding or removing
+  content. The renderer prefers keeping all three projects and trims bullets
+  before dropping a project.
+- The tailored PDF is named `<First>_<Last>_Resume.pdf`, and the dashboard
+  artifact route serves it inline so it opens in the browser instead of
+  downloading as `jobforge-<id>-resume.pdf`.
+
 ## 0.7.0 — workbench dashboard, actionable queue, and live approvals (2026-11-07)
 
 - Replaced the static dashboard shell with a workbench: left rail on desktop,

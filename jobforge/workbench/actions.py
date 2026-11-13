@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import ipaddress
 import os
 import re
 import subprocess
@@ -11,6 +13,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .. import db
 from ..paths import base_dir
@@ -25,6 +28,90 @@ _SECRET_RE = re.compile(
     r"(?:sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9._-]{20,}|BEGIN [A-Z ]*PRIVATE KEY)"
 )
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_MANUAL_ONLY_HOSTS = ("indeed.com", "linkedin.com")
+_TRACKING_PARAM_PREFIXES = ("utm_", "gclid", "fbclid", "msclkid")
+_TRACKING_PARAMS = {"ref", "referrer", "lever-source", "gh_src"}
+
+
+def _is_tracking_param(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in _TRACKING_PARAMS or any(
+        lowered.startswith(prefix) for prefix in _TRACKING_PARAM_PREFIXES
+    )
+
+
+def _public_job_url(value: str, field: str) -> str:
+    """Validate a public http(s) posting URL without fetching it."""
+    text = str(value or "").strip()
+    try:
+        parsed = urlsplit(text)
+        host = (parsed.hostname or "").lower().rstrip(".")
+    except ValueError as exc:
+        raise ToolError("INVALID_ARGUMENT", f"{field} is not a valid URL.") from exc
+    if parsed.scheme not in {"http", "https"} or not host:
+        raise ToolError("INVALID_ARGUMENT", f"{field} must be a public http(s) URL.")
+    if parsed.username or parsed.password:
+        raise ToolError("INVALID_ARGUMENT", f"{field} must not contain credentials.")
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+        raise ToolError("INVALID_ARGUMENT", f"{field} must not target a local host.")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        raise ToolError("INVALID_ARGUMENT", f"{field} must not target a private address.")
+    query = [
+        (key, item)
+        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+        if not _is_tracking_param(key)
+    ]
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc.lower(),
+            parsed.path or "/",
+            urlencode(query, doseq=True),
+            "",
+        )
+    )
+
+
+def _import_line(value: str, field: str, limit: int) -> str:
+    text = re.sub(r"\s+", " ", _CONTROL_RE.sub("", str(value or ""))).strip()
+    if not text:
+        raise ToolError("INVALID_ARGUMENT", f"{field} must not be empty.")
+    return text[:limit]
+
+
+def _import_description(value: str, limit: int) -> str:
+    text = _CONTROL_RE.sub("", str(value or "")).replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if not text:
+        raise ToolError("INVALID_ARGUMENT", "description must not be empty.")
+    return text[:limit]
+
+
+def _import_source(value: str, url: str) -> str:
+    from ..sources.direct import detect_ats
+
+    cleaned = re.sub(r"[^a-z0-9._:-]+", "-", str(value or "").strip().lower()).strip("-")
+    if cleaned:
+        return cleaned[:40]
+    ats = detect_ats(url)
+    return ats[:40] if ats and ats != "generic" else "agent"
+
+
+def _is_manual_only(url: str) -> bool:
+    host = (urlsplit(url or "").hostname or "").lower().rstrip(".")
+    return any(host == suffix or host.endswith("." + suffix) for suffix in _MANUAL_ONLY_HOSTS)
 
 
 def _memory_text(value: str, field: str) -> str:
@@ -169,6 +256,47 @@ def open_dashboard(
     return result, [{"rel": "dashboard", "path": "/"}]
 
 
+def _resume_export_dir(value: str, config: Any) -> str:
+    """Resolve a writable export directory for the rendered PDF.
+
+    An explicit path must be an existing absolute directory. Without one, the
+    MCP server's working directory is used when it looks like a host session
+    workspace, not the JobForge app home or source checkout.
+    """
+    text = str(value or "").strip()
+    if text:
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ToolError(
+                "INVALID_ARGUMENT", "destination_dir must be an absolute path."
+            )
+        try:
+            path = path.resolve(strict=True)
+        except OSError as exc:
+            raise ToolError(
+                "INVALID_ARGUMENT", "destination_dir does not exist."
+            ) from exc
+        if not path.is_dir() or not os.access(path, os.W_OK):
+            raise ToolError(
+                "INVALID_ARGUMENT", "destination_dir must be a writable directory."
+            )
+        return str(path)
+
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    app_home = Path(config.data_dir).parent.resolve()
+    checkout = base_dir().resolve()
+    if cwd in {Path("/"), home}:
+        return ""
+    if cwd == app_home or cwd.is_relative_to(app_home):
+        return ""
+    if cwd == checkout or cwd.is_relative_to(checkout):
+        return ""
+    if not cwd.is_dir() or not os.access(cwd, os.W_OK):
+        return ""
+    return str(cwd)
+
+
 def _operation_public(operation: dict[str, Any]) -> dict[str, Any]:
     result = operation.get("result") or {}
     safe_result = {
@@ -181,6 +309,7 @@ def _operation_public(operation: dict[str, Any]) -> dict[str, Any]:
             "llm_model",
             "mode",
             "facts",
+            "export_path",
             "submitted",
             "captcha",
         )
@@ -191,6 +320,7 @@ def _operation_public(operation: dict[str, Any]) -> dict[str, Any]:
     return {
         "operation_id": operation["id"],
         "action": operation["action"],
+        "destination_dir": str((operation.get("payload") or {}).get("export_dir") or ""),
         "state": operation["state"],
         "created_at": operation["created_at"],
         "expires_at": operation["expires_at"],
@@ -222,13 +352,17 @@ def request_resume(
             "INVALID_ARGUMENT",
             "No base resume is configured for the bound profile.",
         )
+    export_dir = _resume_export_dir(params.get("destination_dir", ""), context.config)
+    payload: dict[str, Any] = {"job_id": int(job.id or 0)}
+    if export_dir:
+        payload["export_dir"] = export_dir
     try:
         operation = db.create_agent_operation(
             context.conn,
             connection_id=context.connection_id,
             profile_id=context.profile_id,
             action="render_resume",
-            payload={"job_id": int(job.id or 0)},
+            payload=payload,
             idempotency_key=params["idempotency_key"],
         )
     except ValueError as exc:
@@ -241,6 +375,7 @@ def request_resume(
 def get_operation(
     context: QueryContext, params: dict[str, Any]
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    db.expire_stale_agent_operations(context.conn)
     operation = db.get_agent_operation(context.conn, params["operation_id"])
     if (
         operation is None
@@ -256,6 +391,7 @@ def get_operation(
 def list_operations(
     context: QueryContext, params: dict[str, Any]
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    db.expire_stale_agent_operations(context.conn)
     rows = db.list_agent_operations(
         context.conn,
         profile_id=context.profile_id,
@@ -264,6 +400,104 @@ def list_operations(
     )
     return {"operations": [_operation_public(row) for row in rows]}, [
         {"rel": "dashboard", "path": "/operations"}
+    ]
+
+
+def import_job(
+    context: QueryContext, params: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Store and quick-score one posting the host agent already fetched."""
+    from .. import services
+    from ..models import Job
+    from ..scan.quick import quick_scan
+    from ..sources.base import is_remote
+
+    url = _public_job_url(params["url"], "url")
+    apply_url = _public_job_url(params["apply_url"], "apply_url") if params.get("apply_url") else url
+    title = _import_line(params["title"], "title", 300)
+    company = _import_line(params["company"], "company", 200)
+    description = _import_description(params["description"], 60_000)
+    location = (
+        _import_line(params.get("location", ""), "location", 200)
+        if str(params.get("location") or "").strip()
+        else ""
+    )
+    remote = params.get("remote")
+    if remote is None:
+        remote = is_remote(location, description)
+    salary_min = params.get("salary_min")
+    salary_max = params.get("salary_max")
+    if salary_min is not None and salary_max is not None and salary_min > salary_max:
+        raise ToolError("INVALID_ARGUMENT", "salary_min must not exceed salary_max.")
+    currency = str(params.get("salary_currency") or "USD").strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        raise ToolError("INVALID_ARGUMENT", "salary_currency must be a three-letter code.")
+    source = _import_source(params.get("source", ""), url)
+    source_id = str(params.get("source_id") or "").strip()
+    if not source_id:
+        source_id = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    competition = str(params.get("competition_profile") or "").strip()
+    job = Job(
+        source=source,
+        source_id=source_id,
+        company=company,
+        title=title,
+        location=location,
+        remote=bool(remote),
+        salary_min=salary_min,
+        salary_max=salary_max,
+        salary_currency=currency,
+        url=url,
+        apply_url=apply_url,
+        description=description,
+        posted_at=(str(params.get("posted_at") or "").strip() or None),
+        competition_profile=competition,
+        raw={"agent_import": True, "site": (urlsplit(url).hostname or "")},
+    )
+    existing = context.conn.execute(
+        "SELECT id FROM jobs WHERE fingerprint=?", (job.fingerprint,)
+    ).fetchone()
+    job_id = db.upsert_job(context.conn, job)
+    job.id = job_id
+    archetypes = services.load_archetypes(context.config)
+    scan = quick_scan(
+        job,
+        profile=context.profile,
+        prefs=context.prefs,
+        archetypes=archetypes,
+        scan_cfg=dict(context.config.scan or {}),
+    )
+    db.set_scan(context.conn, scan)
+    match = db.get_match(context.conn, job_id, context.profile_id)
+    return {
+        "job_id": job_id,
+        "created": existing is None,
+        "source": source,
+        "url": url,
+        "scan_score": round(float(scan.scan_score), 1),
+        "scan_band": scan.band,
+        "fit_score": round(float(match.score), 1) if match else None,
+        "manual_only": _is_manual_only(url) or _is_manual_only(apply_url),
+        "next": "jobforge_score" if match is None else "jobforge_explain_fit",
+    }, [{"rel": "job", "path": f"/jobs/{job_id}"}]
+
+
+def ingest_emails(
+    context: QueryContext, params: dict[str, Any]
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Accept host-read employer mail and run the deterministic tracker."""
+    from ..email.ingest import ingest_messages
+
+    result = ingest_messages(
+        context.conn,
+        context.config.email,
+        params.get("provider", "agent"),
+        params["messages"],
+        apply_status=bool(params.get("apply_status", True)),
+    )
+    return result, [
+        {"rel": "dashboard", "path": "/inbox"},
+        {"rel": "dashboard", "path": "/applications"},
     ]
 
 
@@ -391,6 +625,8 @@ ACTION_TOOLS = {
     "jobforge_get_operation",
     "jobforge_list_operations",
     "jobforge_scan",
+    "jobforge_import_job",
+    "jobforge_ingest_emails",
     "jobforge_score",
     "jobforge_build_queue",
 }
@@ -408,6 +644,8 @@ def dispatch(
         "jobforge_request_resume": request_resume,
         "jobforge_request_submission": request_submission,
         "jobforge_scan": scan_jobs,
+        "jobforge_import_job": import_job,
+        "jobforge_ingest_emails": ingest_emails,
         "jobforge_score": score_jobs,
         "jobforge_build_queue": build_queue,
         "jobforge_get_operation": get_operation,

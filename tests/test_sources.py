@@ -55,3 +55,60 @@ def test_ats_detection():
     assert detect_ats("https://jobs.ashbyhq.com/acme/123") == "ashby"
     assert detect_ats("https://apply.workable.com/acme/j/ABC/") == "workable"
     assert detect_ats("https://example.com/jobs/1") == "generic"
+
+
+class _FakeResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+def _fetch_html(monkeypatch, url: str, html: str):
+    from jobforge.sources import direct
+
+    monkeypatch.setattr(direct, "assert_public_url", lambda value: None)
+    monkeypatch.setattr(direct, "http_get", lambda *args, **kwargs: _FakeResponse(html))
+    return direct.fetch_job_url(url)
+
+
+def test_fetch_url_extracts_greenhouse_company_location_and_clean_description(monkeypatch):
+    html = """
+    <html><head>
+      <title>Job Application for Software Engineer at Anthropic</title>
+      <meta property="og:title" content="Software Engineer">
+      <meta property="og:description" content="San Francisco, CA | New York City, NY">
+    </head><body>
+      <main><a>Back to jobs</a>
+        <div class="job__description"><h2>About Anthropic</h2><p>We build AI systems.</p></div>
+      </main>
+    </body></html>
+    """
+    job = _fetch_html(
+        monkeypatch,
+        "https://job-boards.greenhouse.io/anthropic/jobs/1",
+        html,
+    )
+
+    assert job.company == "Anthropic"
+    assert job.title == "Software Engineer"
+    assert job.location == "San Francisco, CA | New York City, NY"
+    assert "About Anthropic" in job.description
+    assert "Back to jobs" not in job.description
+
+
+def test_fetch_url_extracts_workday_company_and_location(monkeypatch):
+    html = """
+    <html><head>
+      <meta property="og:title" content="Software Engineer I">
+      <meta property="og:description" content="Date Posted: 2026-10-16 Country: United States of America Location: Austin, TX Position Role Type: Onsite Python role.">
+    </head><body><main><h1>Software Engineer I</h1></main></body></html>
+    """
+    job = _fetch_html(
+        monkeypatch,
+        "https://globalhr.wd5.myworkdayjobs.com/rec_rtx_ext_gateway/job/Austin/Software-Engineer-I",
+        html,
+    )
+
+    assert job.company == "RTX"
+    assert job.location == "Austin, TX"
+    assert job.title == "Software Engineer I"
+    assert job.description.startswith("Date Posted:")

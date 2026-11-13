@@ -2,29 +2,98 @@
 {% block title %}Inbox · JobForge{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><h1>Inbox</h1></div>
-  <form method="post" action="/email/poll"><button class="primary">Poll IMAP</button></form>
+  <div>
+    <p class="eyebrow">Tracker input</p>
+    <h1>Inbox</h1>
+    <p class="muted">Matched employer mail advances the application stage. Ambiguous or unknown senders wait for a human.</p>
+  </div>
+  <div class="actions">
+    {% if email_ready %}
+    <form method="post" action="/email/poll"><button class="primary">Sync inbox</button></form>
+    {% else %}
+    <a class="button" href="/settings#email">Connect email</a>
+    {% endif %}
+    <a class="button" href="/applications">Tracker</a>
+  </div>
 </section>
 
+<section class="stat-strip" aria-label="Inbox summary">
+  <div class="stat-cell"><strong>{{ emails|length }}</strong><span>shown</span></div>
+  <div class="stat-cell"><strong>{{ email_tracker.unmatched }}</strong><span>unmatched</span></div>
+  <div class="stat-cell"><strong>{{ email_tracker.changes }}</strong><span>status changes</span></div>
+  <div class="stat-cell"><strong>{{ email_last_poll.status_changes or 0 if email_last_poll else 0 }}</strong><span>last sync changes</span></div>
+</section>
+
+{% if email_last_poll and email_last_poll.error %}
+<div class="flash" role="status">Last sync error: {{ email_last_poll.error|short(220) }}</div>
+{% endif %}
+
 <section class="panel">
-  <div class="panel-head"><h2>{{ emails|length }} messages</h2><span class="muted">Verification codes, confirmations, interviews, offers, rejections</span></div>
+  <div class="panel-head">
+    <h2>{{ emails|length }} message{{ '' if emails|length == 1 else 's' }}</h2>
+    <div class="filters">
+      <a class="button {{ 'primary' if filter == 'relevant' else '' }}" href="/inbox">Relevant</a>
+      <a class="button {{ 'primary' if filter == 'all' else '' }}" href="/inbox?filter=all">All</a>
+      <a class="button {{ 'primary' if filter == 'unmatched' else '' }}" href="/inbox?filter=unmatched">Needs review</a>
+      <a class="button {{ 'primary' if filter == 'changed' else '' }}" href="/inbox?filter=changed">Changed status</a>
+    </div>
+  </div>
   {% if emails %}
-  <table>
-    <thead><tr><th>Received</th><th>Category</th><th>From</th><th>Subject</th><th>Code</th></tr></thead>
+  <table class="table-cards inbox-table">
+    <thead><tr><th>Received</th><th>Signal</th><th>Application</th><th>Subject</th><th>Change</th><th></th></tr></thead>
     <tbody>
     {% for e in emails %}
       <tr>
-        <td class="muted">{{ e.received_at[:16] }}</td>
-        <td><span class="pill cat-{{ e.category }}">{{ e.category }}</span></td>
-        <td>{{ e.sender|short(40) }}</td>
-        <td>{{ e.subject|short(80) }}</td>
-        <td>{% if e.verification_code %}<code>{{ e.verification_code }}</code>{% endif %}</td>
+        <td data-label="Received" class="muted">{{ e.received_at[:16] }}</td>
+        <td data-label="Signal"><span class="pill cat-{{ e.category }}">{{ e.category }}</span>{% if e.verification_code %}<div class="muted small">code <code>{{ e.verification_code }}</code></div>{% endif %}</td>
+        <td data-label="Application">
+          {% if e.application_id %}
+            <a href="/applications/{{ e.application_id }}">{{ e.company|short(32) }}</a>
+            <div class="muted small">{{ e.title|short(44) }}</div>
+          {% else %}
+            <span class="pill warn">unmatched</span>
+            <div class="muted small">{{ e.match_reason|short(70) }}</div>
+          {% endif %}
+        </td>
+        <td data-label="Subject">
+          {{ e.subject|short(84) }}
+          <div class="muted small">{{ e.sender|short(48) }}</div>
+          {% if e.message_id and e.message_id.startswith('host:') %}<span class="pill">via {{ e.message_id.split(':')[1] }}</span>{% endif %}
+          {% if e.match_score %}<div class="muted small">match {{ '%.0f'|format(e.match_score) }} · {{ e.match_reason|short(80) }}</div>{% endif %}
+        </td>
+        <td data-label="Change">
+          {% if e.status_before and e.status_after and e.status_before != e.status_after %}
+            <span class="pill good">{{ e.status_before }} → {{ e.status_after }}</span>
+          {% elif e.status_after %}
+            <span class="muted">{{ e.status_after }}</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td data-label="Action">
+          {% if e.application_id %}
+          <form method="post" action="/email/{{ e.id }}/unlink" class="inline"><button class="ghost">Unlink</button></form>
+          {% else %}
+          <form method="post" action="/email/{{ e.id }}/link" class="inline link-email-form">
+            <select name="application_id" aria-label="Link to application" required>
+              <option value="">Link to…</option>
+              {% for app in applications %}
+              <option value="{{ app.id }}">{{ app.company|short(24) }} — {{ app.title|short(30) }}</option>
+              {% endfor %}
+            </select>
+            <button class="ghost">Link</button>
+          </form>
+          {% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   {% else %}
-  <div class="empty-action"><strong>No messages yet.</strong><p>Configure IMAP in <code>config.yml</code> and set <code>JOBFORGE_IMAP_PASSWORD</code>. Email polling can suggest status changes; it never submits an application.</p><a class="button" href="/settings">Open settings</a></div>
+  <div class="empty-action">
+    <strong>No messages in this view.</strong>
+    <p>{% if email_ready %}Run a sync, or switch the filter.{% else %}Configure IMAP in <a href="/settings#email">Settings</a> and add an app password. Email sync never submits an application.{% endif %}</p>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

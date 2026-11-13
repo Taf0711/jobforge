@@ -23,7 +23,7 @@ from .models import (
     utcnow,
 )
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS applications (
     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'draft',
+    status_source TEXT NOT NULL DEFAULT 'manual',
     ats TEXT NOT NULL DEFAULT '',
     resume_path TEXT NOT NULL DEFAULT '',
     cover_letter_path TEXT NOT NULL DEFAULT '',
@@ -148,7 +149,13 @@ CREATE TABLE IF NOT EXISTS emails (
     received_at TEXT NOT NULL DEFAULT '',
     category TEXT NOT NULL DEFAULT 'other',
     verification_code TEXT NOT NULL DEFAULT '',
-    forwarded INTEGER NOT NULL DEFAULT 0
+    forwarded INTEGER NOT NULL DEFAULT 0,
+    match_score REAL NOT NULL DEFAULT 0,
+    match_reason TEXT NOT NULL DEFAULT '',
+    match_source TEXT NOT NULL DEFAULT '',
+    status_before TEXT NOT NULL DEFAULT '',
+    status_after TEXT NOT NULL DEFAULT '',
+    processed_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS saved_jobs (
@@ -324,13 +331,43 @@ def connect_readonly(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def _ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
 def init_db(path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.executescript(SCHEMA)
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(matches)").fetchall()}
-        if "meta_json" not in columns:
-            conn.execute("ALTER TABLE matches ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
+        _ensure_columns(
+            conn,
+            "matches",
+            {"meta_json": "TEXT NOT NULL DEFAULT '{}'"},
+        )
+        # v8: email-driven tracker provenance and status history.
+        _ensure_columns(
+            conn,
+            "applications",
+            {"status_source": "TEXT NOT NULL DEFAULT 'manual'"},
+        )
+        _ensure_columns(
+            conn,
+            "emails",
+            {
+                "match_score": "REAL NOT NULL DEFAULT 0",
+                "match_reason": "TEXT NOT NULL DEFAULT ''",
+                "match_source": "TEXT NOT NULL DEFAULT ''",
+                "status_before": "TEXT NOT NULL DEFAULT ''",
+                "status_after": "TEXT NOT NULL DEFAULT ''",
+                "processed_at": "TEXT NOT NULL DEFAULT ''",
+            },
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_emails_app ON emails(application_id, received_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_emails_processed ON emails(processed_at)")
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
 
@@ -756,12 +793,13 @@ def create_application(conn: sqlite3.Connection, app: Application) -> int:
     now = utcnow()
     cur = conn.execute(
         """
-        INSERT INTO applications (job_id, profile_id, status, ats, resume_path, cover_letter_path,
-                                  answers_json, screenshot_path, error_code, notes,
+        INSERT INTO applications (job_id, profile_id, status, status_source, ats, resume_path,
+                                  cover_letter_path, answers_json, screenshot_path, error_code, notes,
                                   created_at, submitted_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(job_id, profile_id) DO UPDATE SET
-            status=excluded.status, ats=excluded.ats, resume_path=excluded.resume_path,
+            status=excluded.status, status_source=excluded.status_source, ats=excluded.ats,
+            resume_path=excluded.resume_path,
             cover_letter_path=excluded.cover_letter_path, answers_json=excluded.answers_json,
             screenshot_path=excluded.screenshot_path, error_code=excluded.error_code,
             notes=excluded.notes,
@@ -772,6 +810,7 @@ def create_application(conn: sqlite3.Connection, app: Application) -> int:
             app.job_id,
             app.profile_id,
             app.status,
+            app.status_source,
             app.ats,
             app.resume_path,
             app.cover_letter_path,
@@ -796,6 +835,7 @@ def create_application(conn: sqlite3.Connection, app: Application) -> int:
 def update_application(conn: sqlite3.Connection, app_id: int, **fields: Any) -> None:
     allowed = {
         "status",
+        "status_source",
         "ats",
         "resume_path",
         "cover_letter_path",
@@ -831,6 +871,7 @@ def _application_from_row(row: sqlite3.Row) -> Application:
         job_id=row["job_id"],
         profile_id=row["profile_id"],
         status=row["status"],
+        status_source=row["status_source"] if "status_source" in row.keys() else "manual",
         ats=row["ats"],
         resume_path=row["resume_path"],
         cover_letter_path=row["cover_letter_path"],
@@ -862,7 +903,18 @@ def list_applications(
         params.append(status)
     rows = conn.execute(
         f"""
-        SELECT a.*, j.title, j.company, j.location, j.apply_url, j.url
+        SELECT a.*, j.title, j.company, j.location, j.apply_url, j.url,
+               (SELECT e.received_at FROM emails e WHERE e.application_id=a.id
+                ORDER BY e.received_at DESC, e.id DESC LIMIT 1) AS last_email_at,
+               (SELECT e.category FROM emails e WHERE e.application_id=a.id
+                ORDER BY e.received_at DESC, e.id DESC LIMIT 1) AS last_email_category,
+               (SELECT e.subject FROM emails e WHERE e.application_id=a.id
+                ORDER BY e.received_at DESC, e.id DESC LIMIT 1) AS last_email_subject,
+               (SELECT e.status_after FROM emails e WHERE e.application_id=a.id
+                AND e.status_after <> '' ORDER BY e.received_at DESC, e.id DESC LIMIT 1) AS last_email_status,
+               (SELECT COUNT(*) FROM emails e WHERE e.application_id=a.id
+                AND e.status_before <> '' AND e.status_after <> ''
+                AND e.status_before <> e.status_after) AS email_change_count
         FROM applications a JOIN jobs j ON j.id=a.job_id
         WHERE {' AND '.join(where)}
         ORDER BY a.updated_at DESC LIMIT ?
@@ -873,6 +925,11 @@ def list_applications(
     for row in rows:
         d = dict(row)
         d["answers"] = json.loads(d.pop("answers_json") or "{}")
+        d["last_email_at"] = d.get("last_email_at") or ""
+        d["last_email_category"] = d.get("last_email_category") or ""
+        d["last_email_subject"] = d.get("last_email_subject") or ""
+        d["last_email_status"] = d.get("last_email_status") or ""
+        d["email_change_count"] = int(d.get("email_change_count") or 0)
         out.append(d)
     return out
 
@@ -929,40 +986,206 @@ def list_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]
 # ---------------------------------------------------------------------------
 
 
-def save_email(conn: sqlite3.Connection, msg: EmailMessage) -> int:
+def save_email(
+    conn: sqlite3.Connection, msg: EmailMessage, *, replace_match: bool = False
+) -> int:
+    """Store or refresh one message.
+
+    Manual links are never overwritten by the automatic matcher. When
+    ``replace_match`` is true the caller owns the match decision (including an
+    explicit ``None``); otherwise the existing application link is preserved.
+    """
     if not msg.message_id:
         import hashlib
 
         basis = f"{msg.sender}|{msg.subject}|{msg.received_at}".encode("utf-8")
         msg.message_id = "local:" + hashlib.sha256(basis).hexdigest()[:32]
-    cur = conn.execute(
-        """
-        INSERT INTO emails (application_id, message_id, sender, subject, body,
-                            received_at, category, verification_code, forwarded)
-        VALUES (?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(message_id) DO UPDATE SET
-            application_id=COALESCE(excluded.application_id, emails.application_id),
-            category=excluded.category, verification_code=excluded.verification_code
-        """,
-        (
-            msg.application_id,
-            msg.message_id,
-            msg.sender,
-            msg.subject,
-            msg.body,
-            msg.received_at,
-            msg.category,
-            msg.verification_code,
-            int(msg.forwarded),
-        ),
-    )
+    existing = conn.execute(
+        "SELECT id, application_id, match_source, match_score, match_reason FROM emails "
+        "WHERE message_id=?",
+        (msg.message_id,),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO emails (application_id, message_id, sender, subject, body,
+                                received_at, category, verification_code, forwarded,
+                                match_score, match_reason, match_source,
+                                status_before, status_after, processed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                msg.application_id,
+                msg.message_id,
+                msg.sender,
+                msg.subject,
+                msg.body,
+                msg.received_at,
+                msg.category,
+                msg.verification_code,
+                int(msg.forwarded),
+                float(msg.match_score or 0),
+                msg.match_reason,
+                msg.match_source,
+                msg.status_before,
+                msg.status_after,
+                msg.processed_at,
+            ),
+        )
+    else:
+        manual = str(existing["match_source"] or "") in {"manual", "manual_ignore"}
+        if manual and not replace_match:
+            application_id = existing["application_id"]
+            match_score = float(existing["match_score"] or 0)
+            match_reason = str(existing["match_reason"] or "")
+            match_source = str(existing["match_source"] or "")
+        else:
+            application_id = msg.application_id
+            match_score = float(msg.match_score or 0)
+            match_reason = msg.match_reason
+            match_source = msg.match_source
+        relinked = existing["application_id"] != application_id
+        conn.execute(
+            """
+            UPDATE emails SET application_id=?, sender=?, subject=?, body=?,
+                received_at=?, category=?, verification_code=?, forwarded=?,
+                match_score=?, match_reason=?, match_source=?,
+                processed_at=CASE WHEN ? THEN '' ELSE processed_at END,
+                status_before=CASE WHEN ? THEN '' ELSE status_before END,
+                status_after=CASE WHEN ? THEN '' ELSE status_after END
+            WHERE id=?
+            """,
+            (
+                application_id,
+                msg.sender,
+                msg.subject,
+                msg.body,
+                msg.received_at,
+                msg.category,
+                msg.verification_code,
+                int(msg.forwarded),
+                match_score,
+                match_reason,
+                match_source,
+                int(relinked),
+                int(relinked),
+                int(relinked),
+                int(existing["id"]),
+            ),
+        )
     conn.commit()
     row = conn.execute("SELECT id FROM emails WHERE message_id=?", (msg.message_id,)).fetchone()
     return int(row["id"]) if row else 0
 
 
-def list_emails(conn: sqlite3.Connection, limit: int = 100) -> list[dict[str, Any]]:
-    rows = conn.execute("SELECT * FROM emails ORDER BY received_at DESC LIMIT ?", (limit,)).fetchall()
+def get_email(conn: sqlite3.Connection, email_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT e.*, a.job_id AS job_id, j.company AS company, j.title AS title
+        FROM emails e
+        LEFT JOIN applications a ON a.id=e.application_id
+        LEFT JOIN jobs j ON j.id=a.job_id
+        WHERE e.id=?
+        """,
+        (email_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def email_from_row(row: sqlite3.Row | dict[str, Any]) -> EmailMessage:
+    data = dict(row)
+    return EmailMessage(
+        id=data.get("id"),
+        application_id=data.get("application_id"),
+        message_id=str(data.get("message_id") or ""),
+        sender=str(data.get("sender") or ""),
+        subject=str(data.get("subject") or ""),
+        body=str(data.get("body") or ""),
+        received_at=str(data.get("received_at") or ""),
+        category=str(data.get("category") or "other"),
+        verification_code=str(data.get("verification_code") or ""),
+        forwarded=bool(data.get("forwarded")),
+        match_score=float(data.get("match_score") or 0),
+        match_reason=str(data.get("match_reason") or ""),
+        match_source=str(data.get("match_source") or ""),
+        status_before=str(data.get("status_before") or ""),
+        status_after=str(data.get("status_after") or ""),
+        processed_at=str(data.get("processed_at") or ""),
+    )
+
+
+def link_email(
+    conn: sqlite3.Connection,
+    email_id: int,
+    application_id: int | None,
+    *,
+    source: str = "manual",
+    score: float = 0.0,
+    reason: str = "",
+) -> None:
+    """Set an explicit email-to-application link and queue it for reprocessing."""
+    conn.execute(
+        "UPDATE emails SET application_id=?, match_source=?, match_score=?, match_reason=?,\n"
+        "status_before='', status_after='', processed_at='' WHERE id=?",
+        (application_id, source, float(score), reason, email_id),
+    )
+    conn.commit()
+
+
+def mark_email_processed(
+    conn: sqlite3.Connection,
+    email_id: int,
+    *,
+    status_before: str,
+    status_after: str,
+) -> None:
+    conn.execute(
+        "UPDATE emails SET processed_at=?, status_before=?, status_after=? WHERE id=?",
+        (utcnow(), status_before, status_after, email_id),
+    )
+    conn.commit()
+
+
+def list_emails(
+    conn: sqlite3.Connection,
+    limit: int = 100,
+    *,
+    unmatched_only: bool = False,
+    changed_only: bool = False,
+    relevant_only: bool = False,
+) -> list[dict[str, Any]]:
+    where = []
+    if relevant_only:
+        where.append("(e.application_id IS NOT NULL OR e.category <> 'other')")
+    if unmatched_only:
+        where.append("e.application_id IS NULL")
+        where.append("COALESCE(e.match_source,'') <> 'manual_ignore'")
+    if changed_only:
+        where.append(
+            "e.status_before <> '' AND e.status_after <> '' "
+            "AND e.status_before <> e.status_after"
+        )
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = conn.execute(
+        f"""
+        SELECT e.*, a.status AS application_status, a.status_source AS application_status_source,
+               a.job_id AS job_id, j.company AS company, j.title AS title
+        FROM emails e
+        LEFT JOIN applications a ON a.id=e.application_id
+        LEFT JOIN jobs j ON j.id=a.job_id
+        {clause}
+        ORDER BY e.received_at DESC, e.id DESC LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_emails_for_application(conn: sqlite3.Connection, application_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM emails WHERE application_id=? ORDER BY received_at, id",
+        (application_id,),
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -1602,6 +1825,37 @@ def get_agent_operation(conn: sqlite3.Connection, operation_id: str) -> dict[str
         "SELECT * FROM agent_operations WHERE id=?", (operation_id,)
     ).fetchone()
     return _operation_from_row(row) if row else None
+
+
+def expire_stale_agent_operations(
+    conn: sqlite3.Connection, *, now: str | None = None
+) -> int:
+    """Move expired pending requests to ``expired``.
+
+    Pending requests are inert, but they should not sit in the approval queue
+    forever. Expiry is a maintenance transition, not approval or denial.
+    """
+    moment = now or utcnow()
+    rows = conn.execute(
+        "SELECT id FROM agent_operations "
+        "WHERE state='pending_approval' AND expires_at IS NOT NULL AND expires_at < ?",
+        (moment,),
+    ).fetchall()
+    ids = [str(row["id"]) for row in rows]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(
+        f"UPDATE agent_operations SET state='expired', finished_at=? "
+        f"WHERE id IN ({placeholders}) AND state='pending_approval'",
+        (moment, *ids),
+    )
+    conn.commit()
+    for operation_id in ids:
+        append_agent_operation_event(
+            conn, operation_id, "expired", {"reason": "request_expired"}
+        )
+    return len(ids)
 
 
 def list_agent_operations(

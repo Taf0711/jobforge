@@ -47,11 +47,11 @@ jobforge install doctor --hosts claude_code,pi
 
 `plan` is read-only. `apply` backs up the host config, exports the skill, creates one profile-bound connection, writes the MCP entry, and verifies it. Repeated runs reuse the connection and replace the managed entry.
 
-The installer grants read, memory, and proposal scopes. Add write scopes explicitly when the user wants the agent to scan, score, queue, or request submission:
+The installer grants read, memory, and proposal scopes. Add write scopes explicitly when the user wants the agent to scan, import, score, queue, or request submission:
 
 ```bash
 jobforge integrations grant --connection conn_... \
-  --scopes scan:run,matches:write,queue:write,submission:request
+  --scopes scan:run,jobs:write,email:write,matches:write,queue:write,submission:request
 ```
 
 `jobforge_request_submission` still creates only a pending operation. The human approves it in the dashboard, and the existing risk consent and 10/day cap remain required.
@@ -65,4 +65,4 @@ jobforge integrations grant --connection conn_... \
 
 ## Current gap
 
-The skill now supports scope-gated scan/score/queue writes and approval-gated resume or submission requests. Host-generated resume proposals, the review-only browser operation, and MCP-triggered autopilot remain future work. Targets and source configuration still use the local console.
+The skill now supports scope-gated scan/import/score/queue writes and approval-gated resume or submission requests. Host-generated resume proposals, the review-only browser operation, and MCP-triggered autopilot remain future work. Targets and source configuration still use the local console.

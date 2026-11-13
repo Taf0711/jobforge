@@ -29,7 +29,7 @@
       <tr>
         <td><strong>{{ connection.label or connection.client }}</strong><br><span class="muted">{{ connection.client }} · {{ connection.instance_id|short(18) }}</span></td>
         <td>{% if connection.enabled %}<span class="pill good">enabled</span>{% else %}<span class="pill bad">disabled</span>{% endif %}{% if connection.last_seen_at %}<br><span class="muted-small">seen {{ connection.last_seen_at[:16] }}</span>{% endif %}</td>
-        <td class="col-scopes"><div class="scope-chips">{% for scope in connection.scopes %}<span class="scope-chip {{ 'write' if scope in ['scan:run','matches:write','queue:write','submission:request','memory:read_write','proposals:create'] else '' }}">{{ scope }}</span>{% endfor %}</div></td>
+        <td class="col-scopes"><div class="scope-chips">{% for scope in connection.scopes %}<span class="scope-chip {{ 'write' if scope in ['scan:run','jobs:write','email:write','matches:write','queue:write','submission:request','memory:read_write','proposals:create'] else '' }}">{{ scope }}</span>{% endfor %}</div></td>
         <td class="col-last-used muted-small">{{ connection.last_used_at[:16] if connection.last_used_at else 'no actions yet' }}</td>
       </tr>
     {% endfor %}

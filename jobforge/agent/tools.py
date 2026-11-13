@@ -217,8 +217,23 @@ def _tool_get_job(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]:
     job = db.get_job(ctx.conn, job_id)
     if job is None:
         raise ValueError(f"Job {job_id} not found")
-    if bool(args.get("include_description")):
-        row["description"] = (job.description or "")[:8000]
+    description_query = str(args.get("description_query") or "").strip()[:200]
+    if description_query:
+        from ..matching.retrieval import search_jd
+
+        retrieval = search_jd(
+            job.description or "",
+            description_query,
+            limit=_int(args.get("description_limit"), 5, low=1, high=10),
+        )
+        row["description_query"] = description_query
+        row["description_excerpts"] = retrieval["chunks"]
+        row["description_sections"] = retrieval["sections"]
+        row["description_total_chars"] = retrieval["total_chars"]
+        row["description_complete_searched"] = True
+        row["description_untrusted"] = True
+    elif bool(args.get("include_description")):
+        row["description"] = (job.description or "")[:8_000]
     row["quality"] = _quality_payload(ctx.conn, ctx, job_id)
     network = services.load_network(ctx.config)
     if network:
@@ -344,6 +359,9 @@ def _tool_applications(ctx: ToolContext, args: dict[str, Any]) -> dict[str, Any]
                 "company": row.get("company"),
                 "title": row.get("title"),
                 "status": row.get("status"),
+                "status_source": row.get("status_source"),
+                "last_email_at": row.get("last_email_at") or None,
+                "last_email_category": row.get("last_email_category") or None,
                 "created_at": row.get("created_at"),
                 "submitted_at": row.get("submitted_at"),
                 "notes": str(row.get("notes") or "")[:220],
@@ -551,12 +569,18 @@ def create_tool_registry(ctx: ToolContext) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="get_job",
-            description="Read one job with its match, application status, quality gate, and warm path.",
+            description=(
+                "Read one job with its match, application status, quality gate, and warm path. "
+                "Use description_query to retrieve relevant excerpts from the complete "
+                "description instead of a truncated prefix."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "job_id": {"type": "integer"},
                     "include_description": {"type": "boolean"},
+                    "description_query": {"type": "string"},
+                    "description_limit": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
                 "required": ["job_id"],
             },

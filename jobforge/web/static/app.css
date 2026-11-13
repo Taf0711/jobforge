@@ -693,3 +693,25 @@ form.inline { display: inline-flex; align-items: center; gap: 4px; margin: 0; }
 .breadcrumb { margin: 0 0 6px; color: var(--muted); font-size: 11px; }
 .breadcrumb a { color: var(--muted); }
 .breadcrumb a:hover { color: var(--accent); }
+
+/* Email-driven application tracker */
+.small { font-size: 11px; }
+.pill.email-source { background: var(--info-soft); color: var(--info); }
+.cat-confirmation { background: var(--info-soft); color: var(--info); }
+.cat-assessment { background: var(--warn-soft); color: var(--warn); }
+.cat-other { background: var(--surface-2); color: var(--muted); }
+.tracker-table td { vertical-align: middle; }
+.tracker-table select { min-height: 34px; padding: 5px 8px; font-size: 12px; }
+.link-email-form { display: inline-flex; gap: 4px; align-items: center; }
+.link-email-form select { min-height: 34px; max-width: 220px; font-size: 12px; }
+.tracker-timeline { list-style: none; margin: 0; padding: 0; }
+.tracker-timeline li { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+.tracker-timeline li:last-child { border-bottom: 0; }
+.timeline-mark { width: 8px; height: 8px; margin-top: 7px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-2); }
+.timeline-email .timeline-mark { background: var(--info); box-shadow: 0 0 0 4px var(--info-soft); }
+.timeline-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.timeline-body p { margin: 4px 0 6px; }
+@media (max-width: 700px) {
+  .link-email-form { flex-wrap: wrap; }
+  .link-email-form select { max-width: 100%; width: 100%; }
+}

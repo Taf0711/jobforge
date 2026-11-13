@@ -261,3 +261,36 @@ def test_quick_scan_flags_unparsed_year_mention():
     assert scan.scan_score <= 70
     assert scan.meta["years"]["status"] == "unparsed"
     assert any("mentioned but not parsed" in gap for gap in scan.gaps)
+
+
+def test_import_job_url_stores_and_scores(monkeypatch, tmp_path):
+    from jobforge import services
+
+    cfg = _config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    profile = _profile()
+    profile.id = None
+    pid = db.save_profile(conn, profile)
+    db.set_active_profile(conn, pid)
+    db.save_preferences(conn, pid, _prefs())
+
+    job = _job(
+        source="greenhouse",
+        source_id="url-1",
+        company="Acme",
+        title="Software Engineer - New Grad",
+        location="New York, NY",
+        url="https://example.com/jobs/1",
+        apply_url="https://example.com/jobs/1",
+        description="We are hiring a new grad software engineer. Python, React, SQL.",
+    )
+    monkeypatch.setattr(services, "fetch_job_url", lambda url: job)
+
+    first = services.import_job_url(cfg, conn, "https://example.com/jobs/1")
+    assert first["created"] is True
+    assert first["fit_score"] is not None
+    assert db.get_job(conn, first["job_id"]).company == "Acme"
+
+    second = services.import_job_url(cfg, conn, "https://example.com/jobs/1")
+    assert second["created"] is False
+    assert second["job_id"] == first["job_id"]

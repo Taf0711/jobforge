@@ -224,7 +224,7 @@ def _application_context(
         match = CHANNEL_RE.search(str(row.get("notes") or ""))
         channel = match.group(1).strip().lower().replace(" ", "_") if match else "unknown"
         by_channel[channel] = by_channel.get(channel, 0) + 1
-        if status in {"interview", "offer", "rejected"}:
+        if status in {"screening", "interview", "offer", "rejected"}:
             responses[channel] = responses.get(channel, 0) + 1
     performance = [
         {

@@ -699,3 +699,32 @@ def test_agent_web_thread_and_message(tmp_path: Path, monkeypatch):
     assert "Hello from the agent." in page.text
     assert 'data-ask-surface' in page.text
     assert "runtime-test-key" not in page.text
+
+
+def test_get_job_description_query_searches_the_complete_posting(tmp_path: Path):
+    cfg, conn, profile, prefs, job_id = _seed(tmp_path)
+    description = (
+        "Requirements:\n- Python\n\n"
+        + ("filler sentence about the team. " * 600)
+        + "\nPreferred Qualifications:\n- Kubernetes and Terraform\n"
+    )
+    conn.execute("UPDATE jobs SET description=? WHERE id=?", (description, job_id))
+    conn.commit()
+    tools = create_tool_registry(
+        ToolContext(config=cfg, conn=conn, profile=profile, prefs=prefs)
+    )
+    result = execute_tool(
+        tools,
+        ToolContext(config=cfg, conn=conn, profile=profile, prefs=prefs),
+        "get_job",
+        {
+            "job_id": job_id,
+            "description_query": "Kubernetes Terraform",
+            "description_limit": 3,
+        },
+    )
+
+    assert result["description_complete_searched"] is True
+    assert result["description_total_chars"] == len(description)
+    assert any("Kubernetes" in chunk["text"] for chunk in result["description_excerpts"])
+    assert "description" not in result

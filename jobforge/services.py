@@ -315,6 +315,65 @@ def scan(
 
 
 @locked_action
+def import_job_url(
+    config: Config,
+    conn: sqlite3.Connection,
+    url: str,
+    *,
+    profile_id: int | None = None,
+) -> dict[str, Any]:
+    """Fetch one user-supplied public URL, store it, and score it.
+
+    This is the human paste-a-link path. It is not an agent tool: the URL is an
+    explicit user action. JobForge still fetches only public http(s) pages and
+    never submits anything.
+    """
+    from .scan.quick import quick_scan
+
+    profile, prefs = (
+        require_profile_by_id(conn, profile_id)
+        if profile_id is not None
+        else require_profile(config, conn)
+    )
+    run_id = db.start_run(conn, "import_url")
+    try:
+        job = fetch_job_url(str(url or "").strip())
+        before = conn.execute(
+            "SELECT id FROM jobs WHERE fingerprint=?", (job.fingerprint,)
+        ).fetchone()
+        job_id = db.upsert_job(conn, job)
+        job.id = job_id
+        scan = quick_scan(
+            job,
+            profile=profile,
+            prefs=prefs,
+            archetypes=load_archetypes(config),
+            scan_cfg=dict(config.scan or {}),
+        )
+        db.set_scan(conn, scan)
+        match = score_job(
+            job, profile, prefs, scoring_v2=config.features.scoring_v2
+        )
+        db.set_match(conn, match)
+        result = {
+            "job_id": job_id,
+            "created": before is None,
+            "title": job.title,
+            "company": job.company,
+            "location": job.location,
+            "source": job.source,
+            "scan_score": round(float(scan.scan_score), 1),
+            "fit_score": round(float(match.score), 1),
+            "description_chars": len(job.description),
+        }
+        db.finish_run(conn, run_id, RunStatus.OK.value, result)
+        return result
+    except Exception as exc:
+        db.finish_run(conn, run_id, RunStatus.FAILED.value, {"error": str(exc)})
+        raise
+
+
+@locked_action
 def rescore(
     config: Config,
     conn: sqlite3.Connection,
@@ -381,6 +440,7 @@ def rescore(
 _PROTECTED_APPLICATION_STATUSES = frozenset(
     {
         ApplicationStatus.SUBMITTED.value,
+        ApplicationStatus.SCREENING.value,
         ApplicationStatus.INTERVIEW.value,
         ApplicationStatus.OFFER.value,
         ApplicationStatus.REJECTED.value,
@@ -422,6 +482,7 @@ def tailor_job(
     job_id: int,
     *,
     profile_id: int | None = None,
+    export_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     job = db.get_job(conn, job_id)
     if not job:
@@ -446,6 +507,12 @@ def tailor_job(
             "Tailor a new application only after reopening it."
         )
 
+    target_export = None
+    if export_dir:
+        target_export = Path(export_dir).expanduser()
+        if not target_export.is_absolute() or not target_export.is_dir():
+            raise ValueError(f"Export directory does not exist: {target_export}")
+
     llm = LLMClient(config)
     run_id = db.start_run(conn, "tailor")
     try:
@@ -456,6 +523,7 @@ def tailor_job(
             llm=llm,
             archetypes=load_archetypes(config),
             mode=config.tailoring.mode,
+            export_dir=target_export,
         )
         if not result.ats.get("ok"):
             errors = "; ".join(result.ats.get("errors") or ["unknown ATS failure"])
@@ -488,6 +556,7 @@ def tailor_job(
         stats = {
             "application_id": app_id,
             "pdf": result.pdf_path,
+            "export_path": result.export_path,
             "cover_letter": result.cover_letter_path,
             "ats": result.ats,
             "facts": len(result.selected_fact_ids),

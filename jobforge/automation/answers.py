@@ -96,6 +96,30 @@ class AnswerBank:
             if re.search(pattern, q) and value:
                 return Answer(value, category, "high")
 
+        # Screening forms often ask a yes/no question with a minimum year count.
+        # Use the confirmed preference instead of guessing from resume dates;
+        # an unconfirmed count stays unresolved for the human.
+        years_question = re.search(r"how many years", canonical)
+        years_required = re.search(
+            r"(\d{1,2})(?:\s*(?:-|to)\s*\d{1,2})?\s*(?:\+)?\s*(?:years?|yrs?)",
+            canonical,
+        )
+        if "experience" in canonical and (years_question or years_required):
+            if not prefs.years_experience_confirmed:
+                return Answer("", "years_experience", "none")
+            have = float(prefs.years_of_experience or 0)
+            if years_question:
+                return Answer(f"{have:g}", "years_experience", "high")
+            if years_required and re.search(
+                r"\b(do you have|at least|minimum|possess|have you)\b", canonical
+            ):
+                required = float(years_required.group(1))
+                return Answer(
+                    "Yes" if have >= required else "No",
+                    "years_experience",
+                    "high",
+                )
+
         if re.search(
             r"(authorized|eligible|legally able|permitted|allowed).*(work|employment)"
             r"|work authorization|authorization to work|right to work|work[- ]authorized",

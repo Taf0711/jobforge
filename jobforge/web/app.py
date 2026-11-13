@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import shutil
 import sqlite3
 import tempfile
+import threading
 import uuid
 from functools import wraps
 from importlib.metadata import PackageNotFoundError, version
@@ -32,11 +34,11 @@ from ..agent.providers import (
     resolve_provider,
 )
 from ..automation.base import is_manual_only_url
-from ..config import Config, FeatureFlags, ResumeImportConfig, load_config
+from ..config import Config, EmailConfig, FeatureFlags, ResumeImportConfig, load_config
 from ..integrations import github as github_integration
 from ..locking import ActionBusy, action_lock
 from ..matching.experience import coerce_years
-from ..matching.resume import load_profile_file
+from ..matching.resume import education_with_resume_courses, load_profile_file
 from ..models import ApplicationStatus, Preferences, Profile
 from ..paths import default_config_path
 from ..queue import Queue
@@ -66,6 +68,9 @@ SOURCE_LABELS = {
     "nyc_opendata": "NYC Open Data",
     "usajobs": "USAJobs",
     "direct": "Employer page",
+    "agent": "Agent import",
+    "linkedin": "LinkedIn",
+    "indeed": "Indeed",
     "resume-forge": "Resume-forge",
     "e2e": "Test source",
 }
@@ -237,6 +242,87 @@ def _import_profile_upload(cfg: Config, conn: sqlite3.Connection, file: UploadFi
     profile.id = db.save_profile(conn, profile)
     db.set_active_profile(conn, profile.id)
     return profile
+
+
+logger = logging.getLogger("jobforge.email")
+_EMAIL_POLLERS: dict[str, tuple[threading.Thread, threading.Event]] = {}
+
+
+def _store_email_poll(
+    conn: sqlite3.Connection,
+    result: dict[str, Any] | None = None,
+    error: str = "",
+) -> None:
+    """Persist the last poll summary without message bodies or secrets."""
+    from ..models import utcnow
+
+    at = utcnow()
+    db.setting_set(conn, "email.last_poll_at", at)
+    if result is not None:
+        summary = dict(result)
+        changes = summary.get("changes")
+        if isinstance(changes, list):
+            summary["changes"] = changes[:20]
+        db.setting_set(conn, "email.last_poll", json.dumps(summary, ensure_ascii=False))
+        db.setting_set(conn, "email.last_error", "")
+    if error:
+        db.setting_set(conn, "email.last_error", error[:500])
+
+
+def _run_email_poll(cfg: Config) -> dict[str, Any]:
+    from ..email.imap import poll
+
+    conn = db.connect(cfg.db_path)
+    try:
+        try:
+            result = poll(cfg.email, conn)
+        except Exception as exc:
+            _store_email_poll(conn, error=str(exc))
+            raise
+        _store_email_poll(conn, result)
+        return result
+    finally:
+        conn.close()
+
+
+def _stop_email_auto_poller(cfg: Config) -> None:
+    key = str(cfg.db_path)
+    existing = _EMAIL_POLLERS.pop(key, None)
+    if existing is not None:
+        existing[1].set()
+
+
+def _start_email_auto_poller(cfg: Config) -> None:
+    if not cfg.email.enabled or not cfg.email.auto_poll:
+        return
+    if os.environ.get("JOBFORGE_DISABLE_EMAIL_AUTO_POLL") == "1":
+        return
+    key = str(cfg.db_path)
+    existing = _EMAIL_POLLERS.get(key)
+    if existing is not None and existing[0].is_alive():
+        return
+    stop = threading.Event()
+
+    def loop() -> None:
+        delay = 5
+        while not stop.wait(delay):
+            try:
+                with action_lock(cfg, blocking=False):
+                    result = _run_email_poll(cfg)
+                if result.get("status_changes"):
+                    logger.info(
+                        "Email sync applied %s status change(s)",
+                        result.get("status_changes"),
+                    )
+            except ActionBusy:
+                logger.debug("Email sync skipped: another action is running")
+            except Exception as exc:  # noqa: BLE001 - keep the poller alive
+                logger.warning("Email sync failed: %s", exc)
+            delay = max(5, int(cfg.email.poll_interval_minutes or 15)) * 60
+
+    thread = threading.Thread(target=loop, name="jobforge-email-poller", daemon=True)
+    thread.start()
+    _EMAIL_POLLERS[key] = (thread, stop)
 
 
 def _write_config_sections(cfg: Config, updates: dict[str, Any]) -> Path:
@@ -424,6 +510,17 @@ def create_app(config: Config | None = None) -> FastAPI:
                 agent_ready = True
             except Exception:  # noqa: BLE001 - readiness is display-only
                 agent_ready = False
+        email_review_count = 0
+        if cfg.email.enabled:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n FROM emails WHERE application_id IS NULL "
+                    "AND category <> 'other' "
+                    "AND COALESCE(match_source,'') <> 'manual_ignore'"
+                ).fetchone()
+                email_review_count = int(row["n"] if row else 0)
+            except sqlite3.Error:
+                email_review_count = 0
         return {
             "request": request,
             "profile": profile,
@@ -437,6 +534,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "agent_ready": agent_ready,
             "app_version": app_version(),
             "pending_approvals": pending_approvals,
+            "email_review_count": email_review_count,
             "data_dir": str(cfg.data_dir),
             "db_path": str(cfg.db_path),
             "source_labels": SOURCE_LABELS,
@@ -491,6 +589,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         for connection in agent_connections:
             instance = instances.get(str(connection.get("instance_id") or ""), {})
             connection["last_seen_at"] = instance.get("last_seen_at") or ""
+        db.expire_stale_agent_operations(conn)
         pending_operations = [
             item
             for item in db.list_agent_operations(conn, profile_id=profile.id, limit=20)
@@ -528,6 +627,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "next_queue_item": next_queue_item,
                 "github_lead_jobs": github_lead_jobs,
                 "github_lead_count": github_lead_count,
+                **_email_context(conn),
             },
         )
 
@@ -927,6 +1027,25 @@ def create_app(config: Config | None = None) -> FastAPI:
         # `jobforge score --top N` when a human wants detailed fit.
         return RedirectResponse(f"/?msg={_msg(msg)}", status_code=303)
 
+    @app.post("/jobs/import-url")
+    @locked_write
+    def import_job_url_route(
+        url: str = Form(...), conn: sqlite3.Connection = Depends(get_conn)
+    ):
+        try:
+            result = services.import_job_url(cfg, conn, url)
+            msg = (
+                f"Imported {result['title']} at {result['company']} — "
+                f"fit {result['fit_score']:.0f}, scan {result['scan_score']:.0f}"
+            )
+            return RedirectResponse(
+                f"/jobs/{result['job_id']}?msg={_msg(msg)}", status_code=303
+            )
+        except Exception as exc:  # noqa: BLE001 - the URL is user input
+            return RedirectResponse(
+                f"/jobs?msg={_msg(f'URL import failed: {exc}')}", status_code=303
+            )
+
     @app.post("/score/run")
     @locked_write
     def score_run(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
@@ -1149,14 +1268,84 @@ def create_app(config: Config | None = None) -> FastAPI:
         db.set_hidden(conn, job_id, profile.id or 0, True)
         return RedirectResponse("/jobs", status_code=303)
 
+    def _email_context(conn: sqlite3.Connection) -> dict[str, Any]:
+        from ..email.credentials import load_password, password_source
+        from ..email.tracker import last_poll_summary, tracker_overview
+
+        try:
+            configured = bool(cfg.email.username and load_password(cfg.email))
+        except Exception:  # noqa: BLE001 - readiness is display-only
+            configured = False
+        return {
+            "email_ready": bool(cfg.email.enabled and configured),
+            "email_configured": configured,
+            "email_password_source": password_source(cfg.email),
+            "email_last_poll": last_poll_summary(conn),
+            "email_tracker": tracker_overview(conn),
+        }
+
     @app.get("/applications", response_class=HTMLResponse)
     def applications(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         ctx = context(request, conn)
         rows = db.list_applications(conn, ctx["profile"].id, limit=300)
+        status_counts: dict[str, int] = {}
+        for row in rows:
+            status_counts[row["status"]] = status_counts.get(row["status"], 0) + 1
         return templates.TemplateResponse(
             request=request,
             name="applications.html",
-            context={**ctx, "apps": rows, "statuses": [s.value for s in ApplicationStatus]},
+            context={
+                **ctx,
+                **_email_context(conn),
+                "apps": rows,
+                "statuses": [s.value for s in ApplicationStatus],
+                "status_counts": status_counts,
+            },
+        )
+
+    @app.get("/applications/{app_id}", response_class=HTMLResponse)
+    def application_detail(
+        app_id: int, request: Request, conn: sqlite3.Connection = Depends(get_conn)
+    ):
+        ctx = context(request, conn)
+        rows = db.list_applications(conn, ctx["profile"].id, limit=500)
+        application = next((row for row in rows if int(row["id"]) == app_id), None)
+        if application is None:
+            raise HTTPException(status_code=404, detail="Application not found")
+        job = db.get_job(conn, int(application["job_id"]))
+        events = db.list_events(conn, app_id)
+        emails = db.list_emails_for_application(conn, app_id)
+        timeline = [
+            {
+                "at": row["at"],
+                "kind": "event",
+                "title": row["kind"],
+                "detail": row["detail"],
+            }
+            for row in events
+        ]
+        timeline += [
+            {
+                "at": row["received_at"],
+                "kind": "email",
+                "title": f"{row['category']} email",
+                "detail": row["subject"],
+                "email": row,
+            }
+            for row in emails
+        ]
+        timeline.sort(key=lambda item: item["at"] or "", reverse=True)
+        return templates.TemplateResponse(
+            request=request,
+            name="application_detail.html",
+            context={
+                **ctx,
+                **_email_context(conn),
+                "application": application,
+                "job": job,
+                "timeline": timeline,
+                "statuses": [s.value for s in ApplicationStatus],
+            },
         )
 
     @app.post("/applications/{app_id}/status")
@@ -1165,6 +1354,8 @@ def create_app(config: Config | None = None) -> FastAPI:
         app_id: int,
         request: Request,
         status: str = Form(...),
+        note: str = Form(""),
+        return_to: str = Form(""),
         conn: sqlite3.Connection = Depends(get_conn),
     ):
         valid = {s.value for s in ApplicationStatus}
@@ -1178,15 +1369,82 @@ def create_app(config: Config | None = None) -> FastAPI:
             or int(application.profile_id or 0) != int(profile.id or 0)
         ):
             raise HTTPException(status_code=404, detail="Application not found")
-        fields: dict[str, Any] = {"status": status}
-        if status == ApplicationStatus.SUBMITTED.value and not application.submitted_at:
+        fields: dict[str, Any] = {"status": status, "status_source": "manual"}
+        if (
+            status
+            in {
+                ApplicationStatus.SUBMITTED.value,
+                ApplicationStatus.SCREENING.value,
+                ApplicationStatus.INTERVIEW.value,
+                ApplicationStatus.OFFER.value,
+                ApplicationStatus.REJECTED.value,
+            }
+            and not application.submitted_at
+        ):
             fields["submitted_at"] = db.utcnow()
         db.update_application(conn, app_id, **fields)
-        db.log_event(conn, app_id, "status", status)
-        return RedirectResponse("/applications", status_code=303)
+        detail = status
+        if note.strip():
+            detail = f"{status}; note: {note.strip()[:500]}"
+        db.log_event(conn, app_id, "status", detail)
+        target = f"/applications/{app_id}" if return_to == "detail" else "/applications"
+        return RedirectResponse(target, status_code=303)
+
+    @app.post("/email/{email_id}/link")
+    @locked_write
+    def link_email(
+        email_id: int,
+        application_id: int = Form(...),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        profile, _prefs = services.read_profile(cfg, conn)
+        application = db.get_application(conn, application_id)
+        if (
+            profile is None
+            or application is None
+            or int(application.profile_id or 0) != int(profile.id or 0)
+        ):
+            raise HTTPException(status_code=404, detail="Application not found")
+        if db.get_email(conn, email_id) is None:
+            raise HTTPException(status_code=404, detail="Email not found")
+        from ..email.tracker import process_email
+
+        db.link_email(
+            conn,
+            email_id,
+            application_id,
+            source="manual",
+            score=100.0,
+            reason="linked manually in the dashboard",
+        )
+        result = process_email(conn, cfg.email, email_id)
+        msg = f"Email linked to application {application_id}."
+        if result.get("changed"):
+            msg += f" Status {result.get('before')} -> {result.get('after')}."
+        return RedirectResponse(f"/inbox?msg={_msg(msg)}", status_code=303)
+
+    @app.post("/email/{email_id}/unlink")
+    @locked_write
+    def unlink_email(email_id: int, conn: sqlite3.Connection = Depends(get_conn)):
+        if db.get_email(conn, email_id) is None:
+            raise HTTPException(status_code=404, detail="Email not found")
+        db.link_email(
+            conn,
+            email_id,
+            None,
+            source="manual_ignore",
+            score=0.0,
+            reason="unlinked manually in the dashboard",
+        )
+        db.mark_email_processed(conn, email_id, status_before="", status_after="")
+        return RedirectResponse(
+            f"/inbox?msg={_msg('Email unlinked; automatic matching will leave it alone.')}",
+            status_code=303,
+        )
 
     def _operation_view(conn: sqlite3.Connection, operation: dict[str, Any]) -> dict[str, Any]:
         job = None
+        operation["export_dir"] = str((operation.get("payload") or {}).get("export_dir") or "")
         job_id = int((operation.get("payload") or {}).get("job_id") or 0)
         if job_id:
             job = db.get_job(conn, job_id)
@@ -1279,6 +1537,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         conn: sqlite3.Connection = Depends(get_conn),
     ):
         ctx = context(request, conn)
+        db.expire_stale_agent_operations(conn)
         rows = db.list_agent_operations(
             conn, profile_id=ctx["profile"].id, limit=50
         )
@@ -1300,6 +1559,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         operation_id: str, request: Request, conn: sqlite3.Connection = Depends(get_conn)
     ):
         ctx = context(request, conn)
+        db.expire_stale_agent_operations(conn)
         operation = db.get_agent_operation(conn, operation_id)
         if operation is None or int(operation["profile_id"]) != int(ctx["profile"].id or 0):
             raise HTTPException(status_code=404, detail="Operation not found")
@@ -1312,6 +1572,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/operations/{operation_id}")
     def operation_state(operation_id: str, conn: sqlite3.Connection = Depends(get_conn)):
         profile, _prefs = services.read_profile(cfg, conn)
+        db.expire_stale_agent_operations(conn)
         operation = db.get_agent_operation(conn, operation_id)
         if (
             operation is None
@@ -1440,10 +1701,16 @@ def create_app(config: Config | None = None) -> FastAPI:
         root = Path(cfg.output_dir).resolve()
         if not path.is_relative_to(root) or not path.is_file():
             raise HTTPException(status_code=404, detail="Artifact not found")
+        from ..tailoring.tailor import resume_filename
+
+        # Inline so the dashboard link opens the PDF in the browser instead of
+        # forcing a download. The filename is the human-shaped upload name an
+        # ATS sees when the fill browser attaches it.
         return FileResponse(
             path,
             media_type="application/pdf",
-            filename=f"jobforge-{application.job_id}-resume.pdf",
+            filename=resume_filename(profile),
+            content_disposition_type="inline",
         )
 
     @app.get("/profiles", response_class=HTMLResponse)
@@ -1456,6 +1723,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             context={
                 **ctx,
                 "profiles": rows,
+                "education": (
+                    education_with_resume_courses(ctx["profile"])
+                    if ctx["profile"].id
+                    else []
+                ),
                 "github_connected": bool(db.get_connection(conn, "github")),
             },
         )
@@ -1471,6 +1743,74 @@ def create_app(config: Config | None = None) -> FastAPI:
     def activate_profile(profile_id: int, conn: sqlite3.Connection = Depends(get_conn)):
         db.set_active_profile(conn, profile_id)
         return RedirectResponse("/profiles", status_code=303)
+
+    @app.post("/profiles/work-auth")
+    @locked_write
+    def save_work_auth(
+        us_citizen: str = Form("unknown"),
+        itar_eligible: str = Form("unknown"),
+        clearance_eligible: str = Form("unknown"),
+        authorized: str = Form("unknown"),
+        needs_sponsorship: str = Form("unknown"),
+        clearance: str = Form(""),
+        gpa: str = Form(""),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        profile, _ = services.require_profile(cfg, conn)
+        work_auth = dict(profile.work_auth or {})
+
+        def tri(value: str) -> bool | None:
+            text = (value or "").strip().lower()
+            if text == "yes":
+                return True
+            if text == "no":
+                return False
+            return None
+
+        for key, value in (
+            ("us_citizen", us_citizen),
+            ("itar_eligible", itar_eligible),
+            ("clearance_eligible", clearance_eligible),
+            ("authorized", authorized),
+            ("needs_sponsorship", needs_sponsorship),
+        ):
+            parsed = tri(value)
+            if parsed is None:
+                work_auth.pop(key, None)
+            else:
+                work_auth[key] = parsed
+
+        clearance_value = (clearance or "").strip().lower()
+        if clearance_value in {"none", "public trust", "secret", "ts/sci"}:
+            work_auth["clearance"] = clearance_value
+        else:
+            work_auth.pop("clearance", None)
+
+        gpa_value = (gpa or "").strip()
+        if gpa_value:
+            try:
+                parsed_gpa = float(gpa_value)
+            except ValueError:
+                return RedirectResponse(
+                    f"/profiles?msg={_msg('GPA must be a number')}", status_code=303
+                )
+            if not 0 <= parsed_gpa <= 10:
+                return RedirectResponse(
+                    f"/profiles?msg={_msg('GPA must be between 0 and 10')}",
+                    status_code=303,
+                )
+            work_auth["gpa"] = parsed_gpa
+        else:
+            work_auth.pop("gpa", None)
+
+        profile.work_auth = work_auth
+        db.save_profile(conn, profile)
+        try:
+            result = services.rescore(cfg, conn, limit=500)
+            msg = f"Work authorization saved; rescored {result.get('scored', 0)} jobs."
+        except Exception as exc:  # noqa: BLE001 - the profile save already succeeded
+            msg = f"Work authorization saved, but rescore failed: {exc}"
+        return RedirectResponse(f"/profiles?msg={_msg(msg)}", status_code=303)
 
     @app.post("/profiles/reparse")
     @locked_write
@@ -1809,12 +2149,93 @@ def create_app(config: Config | None = None) -> FastAPI:
                 **ctx,
                 "boards": boards,
                 "llm_ready": ctx["agent_ready"],
-                "email_ready": cfg.email.enabled,
+                **_email_context(conn),
                 "features": cfg.features,
                 "active_provider": ctx["active_provider"],
                 "active_model": ctx["active_model"],
             },
         )
+
+    @app.post("/settings/email")
+    @locked_write
+    def save_email_settings(
+        enabled: str = Form(""),
+        host: str = Form("imap.gmail.com"),
+        port: str = Form("993"),
+        username: str = Form(""),
+        folder: str = Form("INBOX"),
+        lookback_days: str = Form("30"),
+        auto_poll: str = Form(""),
+        poll_interval_minutes: str = Form("15"),
+        timeout_seconds: str = Form("20"),
+        status_window_days: str = Form("60"),
+        password: str = Form(""),
+        clear_password: str = Form(""),
+    ):
+        from ..email.credentials import delete_password, password_source, save_password
+
+        try:
+            host_value = host.strip().lower()
+            if not host_value or not all(
+                char.isalnum() or char in ".-_" for char in host_value
+            ):
+                raise ValueError("Host must be a plain IMAP hostname")
+            port_value = int(port)
+            if not 1 <= port_value <= 65535:
+                raise ValueError("Port must be between 1 and 65535")
+            username_value = username.strip()
+            folder_value = folder.strip() or "INBOX"
+            lookback_value = int(lookback_days)
+            if not 1 <= lookback_value <= 365:
+                raise ValueError("Lookback must be between 1 and 365 days")
+            interval_value = max(5, min(1440, int(poll_interval_minutes)))
+            timeout_value = max(5, min(120, int(timeout_seconds)))
+            window_value = max(1, min(365, int(status_window_days)))
+            old_username = cfg.email.username
+            email_data = {
+                "enabled": bool(enabled),
+                "host": host_value,
+                "port": port_value,
+                "username": username_value,
+                "password_env": cfg.email.password_env,
+                "folder": folder_value,
+                "lookback_days": lookback_value,
+                "auto_poll": bool(auto_poll),
+                "poll_interval_minutes": interval_value,
+                "max_messages": cfg.email.max_messages,
+                "timeout_seconds": timeout_value,
+                "status_window_days": window_value,
+                "verification_domains": cfg.email.verification_domains,
+                "verification_senders": cfg.email.verification_senders,
+            }
+            _write_config_sections(cfg, {"email": email_data})
+            cfg.email = EmailConfig(
+                **email_data,
+                secret_dir=str(cfg.data_dir / "connections" / "email"),
+            )
+            if clear_password:
+                delete_password(cfg.email)
+            if password.strip():
+                save_password(cfg.email, password)
+            source = password_source(cfg.email)
+            msg = "Email sync settings saved."
+            if enabled and not username_value:
+                msg += " Set the IMAP username to start syncing."
+            elif enabled and not source:
+                msg += " Add the IMAP app password to start syncing."
+            elif enabled and source:
+                msg += f" Password source: {source}."
+            if old_username and old_username != username_value and not password.strip():
+                msg += " Username changed; enter the password for the new account."
+            if cfg.email.enabled and cfg.email.auto_poll:
+                _stop_email_auto_poller(cfg)
+                _start_email_auto_poller(cfg)
+                msg += " Auto-sync runs while the dashboard is open."
+            else:
+                _stop_email_auto_poller(cfg)
+        except (OSError, yaml.YAMLError, ValueError) as exc:
+            msg = f"Could not save email settings: {exc}"
+        return RedirectResponse(f"/settings?msg={_msg(msg)}#email", status_code=303)
 
     @app.post("/settings")
     @locked_write
@@ -1856,22 +2277,64 @@ def create_app(config: Config | None = None) -> FastAPI:
         return RedirectResponse(f"/settings?msg={_msg('Preferences saved and jobs rescored')}", status_code=303)
 
     @app.get("/inbox", response_class=HTMLResponse)
-    def inbox(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
+    def inbox(
+        request: Request,
+        filter: str = "",
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
         ctx = context(request, conn)
-        rows = db.list_emails(conn, 200)
-        return templates.TemplateResponse(request=request, name="inbox.html", context={**ctx, "emails": rows})
+        unmatched_only = filter == "unmatched"
+        changed_only = filter == "changed"
+        relevant_only = filter not in {"all", "unmatched", "changed"}
+        rows = db.list_emails(
+            conn,
+            250,
+            unmatched_only=unmatched_only,
+            changed_only=changed_only,
+            relevant_only=relevant_only,
+        )
+        applications = db.list_applications(conn, ctx["profile"].id, limit=500)
+        return templates.TemplateResponse(
+            request=request,
+            name="inbox.html",
+            context={
+                **ctx,
+                **_email_context(conn),
+                "emails": rows,
+                "applications": applications,
+                "filter": filter or "relevant",
+            },
+        )
 
     @app.post("/email/poll")
     @locked_write
     def email_poll(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         try:
-            from ..email.imap import poll
-
-            result = poll(cfg.email, conn)
-            msg = f"Email: {result['fetched']} fetched, {result['saved']} saved"
+            result = _run_email_poll(cfg)
+            msg = (
+                f"Email sync: {result['fetched']} fetched, {result['saved']} saved, "
+                f"{result['matched']} matched, {result['status_changes']} status change"
+                f"{'' if result['status_changes'] == 1 else 's'}."
+            )
+            if result.get("ambiguous"):
+                msg += f" {result['ambiguous']} ambiguous; review them in the inbox."
+            if result.get("errors"):
+                msg += f" {len(result['errors'])} message(s) failed."
         except Exception as exc:
-            msg = f"Email poll failed: {exc}"
+            msg = f"Email sync failed: {exc}"
         return RedirectResponse(f"/inbox?msg={_msg(msg)}", status_code=303)
+
+    @app.post("/email/test")
+    @locked_write
+    def email_test(request: Request):
+        from ..email.imap import test_connection
+
+        try:
+            test_connection(cfg.email)
+            msg = "IMAP connection succeeded."
+        except Exception as exc:
+            msg = f"IMAP connection failed: {exc}"
+        return RedirectResponse(f"/settings?msg={_msg(msg)}#email", status_code=303)
 
     @app.get("/runs", response_class=HTMLResponse)
     def runs(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
@@ -1897,6 +2360,13 @@ def create_app(config: Config | None = None) -> FastAPI:
     def api_status(request: Request, conn: sqlite3.Connection = Depends(get_conn)):
         profile, _ = services.require_profile(cfg, conn)
         stats = db.stats(conn, profile.id)
+        from ..email.credentials import load_password
+        from ..email.tracker import last_poll_summary, tracker_overview
+
+        try:
+            email_configured = bool(cfg.email.username and load_password(cfg.email))
+        except Exception:  # noqa: BLE001 - status is display-only
+            email_configured = False
         stats.update(
             {
                 "app_version": app_version(),
@@ -1907,6 +2377,13 @@ def create_app(config: Config | None = None) -> FastAPI:
                 "host": request.url.hostname or cfg.server.host,
                 "port": request.url.port or cfg.server.port,
                 "pid": os.getpid(),
+                "email": {
+                    "enabled": cfg.email.enabled,
+                    "configured": email_configured,
+                    "auto_poll": cfg.email.auto_poll,
+                    "last_poll": last_poll_summary(conn),
+                    "tracker": tracker_overview(conn),
+                },
             }
         )
         return stats
@@ -1923,6 +2400,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             return response
         raise HTTPException(status_code=401, detail="Invalid token")
 
+    _start_email_auto_poller(cfg)
     return app
 
 

@@ -215,9 +215,11 @@ def _status(context: QueryContext) -> dict[str, Any]:
         "capabilities": {
             "read_only": not bool(
                 context.scopes
-                & {"scan:run", "matches:write", "queue:write", "submission:request"}
+                & {"scan:run", "jobs:write", "email:write", "matches:write", "queue:write", "submission:request"}
             ),
             "scan": "scan:run" in context.scopes,
+            "import": "jobs:write" in context.scopes,
+            "email_ingest": "email:write" in context.scopes,
             "score": "matches:write" in context.scopes,
             "queue": "queue:write" in context.scopes,
             "proposals": "proposals:create" in context.scopes,
@@ -363,10 +365,36 @@ def _get_job(context: QueryContext, params: dict[str, Any]) -> tuple[dict[str, A
         "scored_at": scored["scored_at"] if scored else None,
         "application_status": _job_status(context.conn, context.profile_id, int(job.id or 0)),
     }
-    if params["include_description"]:
-        text = _clean(job.description, MAX_DESCRIPTION_CHARS + 1)
-        row["description"] = text[:MAX_DESCRIPTION_CHARS]
-        row["description_truncated"] = len(text) > MAX_DESCRIPTION_CHARS
+    if params.get("description_query"):
+        from ..matching.retrieval import search_jd
+
+        retrieval = search_jd(
+            job.description or "",
+            params["description_query"],
+            limit=params.get("description_limit", 5),
+        )
+        row["description_query"] = params["description_query"]
+        row["description_excerpts"] = [
+            {
+                **chunk,
+                "text": _clean(chunk.get("text"), 1_400),
+            }
+            for chunk in retrieval["chunks"]
+        ]
+        row["description_sections"] = retrieval["sections"]
+        row["description_total_chars"] = retrieval["total_chars"]
+        row["description_complete_searched"] = True
+        row["description_untrusted"] = True
+    elif params["include_description"] or params.get("description_offset"):
+        text = job.description or ""
+        offset = int(params.get("description_offset") or 0)
+        page = text[offset : offset + MAX_DESCRIPTION_CHARS]
+        row["description"] = _clean(page, MAX_DESCRIPTION_CHARS)
+        row["description_offset"] = offset
+        row["description_total_chars"] = len(text)
+        next_offset = offset + MAX_DESCRIPTION_CHARS
+        row["description_next_offset"] = next_offset if next_offset < len(text) else None
+        row["description_truncated"] = next_offset < len(text)
         row["description_untrusted"] = True
     return row, [{"rel": "dashboard", "path": f"/jobs/{job.id}"}]
 
@@ -473,6 +501,36 @@ def _get_readiness(context: QueryContext, params: dict[str, Any]) -> tuple[dict[
     return data, [{"rel": "dashboard", "path": f"/jobs/{job.id}"}]
 
 
+_WORK_AUTH_KEYS = (
+    "authorized",
+    "work_authorized_us",
+    "us_citizen",
+    "itar_eligible",
+    "clearance_eligible",
+    "clearance",
+    "needs_sponsorship",
+    "gpa",
+    "years_experience",
+)
+
+
+def _work_auth_projection(profile: Profile) -> dict[str, Any]:
+    """Expose only the work-authorization keys used by scoring and answers."""
+    source = profile.work_auth or {}
+    result: dict[str, Any] = {}
+    for key in _WORK_AUTH_KEYS:
+        if key not in source or source[key] is None:
+            continue
+        value = source[key]
+        if isinstance(value, bool):
+            result[key] = value
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            result[key] = value
+        else:
+            result[key] = _clean(value, 80)
+    return result
+
+
 def _profile_overview(profile: Profile) -> dict[str, Any]:
     return {
         "name": _clean(profile.full_name or profile.name, 160),
@@ -484,6 +542,7 @@ def _profile_overview(profile: Profile) -> dict[str, Any]:
             "projects": len(profile.projects or []),
             "education": len(profile.education or []),
         },
+        "work_authorization": _work_auth_projection(profile),
     }
 
 
@@ -541,6 +600,13 @@ def _get_profile(context: QueryContext, params: dict[str, Any]) -> tuple[dict[st
             "profile_revision": revision,
             "next_cursor": None,
         }, [{"rel": "dashboard", "path": "/profiles"}]
+    if section == "work_authorization":
+        return {
+            "section": "work_authorization",
+            "work_authorization": _work_auth_projection(context.profile),
+            "profile_revision": revision,
+            "next_cursor": None,
+        }, [{"rel": "dashboard", "path": "/profiles"}]
     items = _profile_items(context.profile, section)
     page = items[offset : offset + params["limit"]]
     more = len(items) > offset + params["limit"]
@@ -562,8 +628,12 @@ def _list_applications(context: QueryContext, params: dict[str, Any]) -> tuple[d
         values.append(params["status"])
     rows = context.conn.execute(
         f"""
-        SELECT a.id, a.job_id, a.status, a.ats, a.created_at, a.submitted_at,
-               a.updated_at, j.company, j.title
+        SELECT a.id, a.job_id, a.status, a.status_source, a.ats, a.created_at,
+               a.submitted_at, a.updated_at, j.company, j.title,
+               (SELECT e.received_at FROM emails e WHERE e.application_id=a.id
+                ORDER BY e.received_at DESC, e.id DESC LIMIT 1) AS last_email_at,
+               (SELECT e.category FROM emails e WHERE e.application_id=a.id
+                ORDER BY e.received_at DESC, e.id DESC LIMIT 1) AS last_email_category
         FROM applications a JOIN jobs j ON j.id=a.job_id
         WHERE {' AND '.join(where)}
         ORDER BY a.updated_at DESC, a.id DESC
@@ -580,7 +650,10 @@ def _list_applications(context: QueryContext, params: dict[str, Any]) -> tuple[d
             "company": _clean(row["company"], 200),
             "title": _clean(row["title"], 200),
             "status": _clean(row["status"], 30),
+            "status_source": _clean(row["status_source"], 20),
             "channel": _clean(row["ats"], 40),
+            "last_email_at": row["last_email_at"] or None,
+            "last_email_category": _clean(row["last_email_category"], 30) or None,
             "created_at": row["created_at"],
             "submitted_at": row["submitted_at"],
             "updated_at": row["updated_at"],

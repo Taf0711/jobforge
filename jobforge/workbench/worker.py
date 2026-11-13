@@ -145,13 +145,18 @@ def run_operation(config: Config, conn, operation_id: str) -> dict[str, Any]:
                 return db.get_agent_operation(conn, operation_id) or operation
 
             if action == "render_resume":
+                export_dir = str((operation.get("payload") or {}).get("export_dir") or "")
+                tailor_kwargs: dict[str, Any] = {"profile_id": context.profile_id}
+                if export_dir:
+                    tailor_kwargs["export_dir"] = export_dir
                 stats = services.tailor_job(
-                    config, conn, job_id, profile_id=context.profile_id
+                    config, conn, job_id, **tailor_kwargs
                 )
                 result = {
                     "application_id": int(stats.get("application_id") or 0),
                     "ats": stats.get("ats") or {},
                     "facts": int(stats.get("facts") or 0),
+                    "export_path": str(stats.get("export_path") or ""),
                     "warnings": list(stats.get("warnings") or [])[:20],
                     "llm_used": bool(stats.get("llm_used")),
                     "llm_model": str(stats.get("llm_model") or ""),

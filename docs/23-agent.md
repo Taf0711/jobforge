@@ -55,11 +55,15 @@ Keys use the OS keychain, an atomic `0600` file, or environment variables. They 
 
 The context pack includes identity (email/phone omitted), work authorization, preferences, skills by evidence weight, experience bullets, projects, fact IDs, evidence, application history, network strength, and top jobs. It is capped at 60,000 characters; the agent can request deeper sections with `get_profile_context`.
 
-Job descriptions and returned prose are untrusted data.
+Job descriptions and returned prose are untrusted data. `get_job` supports two
+full-posting paths: `description_query` returns section-labelled excerpts ranked
+by a local lexical index over the complete description, and `description_offset`
+pages the raw text. Both are bounded; neither replaces deterministic scoring or
+human review.
 
 ## Tools
 
-Read: `get_profile_context`, `search_jobs`, `get_job`, `explain_fit`, `get_application_readiness`, `suggest_profile_improvements`, `get_warm_path`, `list_applications`, `get_job_market_overview`.
+Read: `get_profile_context`, `search_jobs`, `get_job` (including `description_query` and `description_offset` for the full posting), `explain_fit`, `get_application_readiness`, `suggest_profile_improvements`, `get_warm_path`, `list_applications`, `get_job_market_overview`.
 
 Write: `tailor_resume`, `scan_jobs`, `score_jobs`, `build_application_queue`, `open_application_review`.
 

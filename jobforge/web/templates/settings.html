@@ -6,7 +6,7 @@
 </section>
 
 <nav class="settings-nav" aria-label="Settings sections">
-  <a href="#search">Search</a><a href="#runtime">Runtime &amp; sources</a><a href="#features">Features</a><a href="#imports">Resume imports</a>
+  <a href="#search">Search</a><a href="#runtime">Runtime &amp; sources</a><a href="#features">Features</a><a href="#email">Email sync</a><a href="#imports">Resume imports</a>
 </nav>
 <section class="grid-2">
   <div class="panel" id="search">
@@ -50,7 +50,7 @@
       <tr><td>Output</td><td><code>{{ cfg.output_dir }}</code></td></tr>
       <tr><td>Model provider</td><td>{% if llm_ready %}<span class="pill">{{ active_provider }} · {{ active_model }}</span>{% else %}<span class="muted">not connected</span>{% endif %}</td></tr>
       <tr><td>Agent</td><td>{% if features.agent %}<a href="/agent">Open agent</a> · <a href="/providers">Models</a>{% else %}<span class="muted">off</span>{% endif %}</td></tr>
-      <tr><td>Email</td><td>{% if email_ready %}<span class="pill">configured</span>{% else %}<span class="muted">off</span>{% endif %}</td></tr>
+      <tr><td>Email</td><td>{% if email_ready %}<span class="pill good">syncing</span>{% elif email_configured %}<span class="pill warn">configured, paused</span>{% else %}<span class="muted">off</span>{% endif %} · <a href="#email">configure</a></td></tr>
       <tr><td>Submit</td><td><span class="pill">human clicks Submit</span></td></tr>
     </tbody></table>
 
@@ -83,6 +83,53 @@
     <div class="actions"><button class="primary">Save feature flags</button></div>
   </form>
   <p class="setup-note">Env overrides: <code>JOBFORGE_FEATURE_SETUP_WIZARD</code>, <code>JOBFORGE_FEATURE_GITHUB_CONNECTIONS</code>, <code>JOBFORGE_FEATURE_SCORING_V2</code>, <code>JOBFORGE_FEATURE_AGENT</code>, <code>JOBFORGE_FEATURE_AGENT_INTEGRATIONS</code>. Changing the scoring mode does not rewrite existing matches; run <strong>Score</strong> to apply it.</p>
+</section>
+
+<section class="panel" id="email">
+  <div class="panel-head"><h2>Email sync</h2><span class="pill">IMAP · read-only</span></div>
+  <p class="muted">JobForge reads recent messages, matches them to applications by company, role, sender, ATS, and job URL, and advances the stage when the signal is clear. Ambiguous mail stays unlinked. It never sends mail, marks messages read, or submits applications.</p>
+  <form method="post" action="/settings/email" class="stack">
+    <label class="check"><input type="checkbox" name="enabled" value="1" {{ 'checked' if cfg.email.enabled else '' }}> Enable email sync</label>
+    <div class="row">
+      <label>IMAP host <input name="host" value="{{ cfg.email.host }}" placeholder="imap.gmail.com" required></label>
+      <label>Port <input type="number" name="port" value="{{ cfg.email.port }}" min="1" max="65535" required></label>
+    </div>
+    <div class="row">
+      <label>Username <input name="username" value="{{ cfg.email.username or profile.email }}" placeholder="you@gmail.com" autocomplete="username"></label>
+      <label>Folder <input name="folder" value="{{ cfg.email.folder }}" placeholder="INBOX"></label>
+    </div>
+    <div class="row">
+      <label>Lookback days <input type="number" name="lookback_days" value="{{ cfg.email.lookback_days }}" min="1" max="365"></label>
+      <label>Auto-sync interval (minutes) <input type="number" name="poll_interval_minutes" value="{{ cfg.email.poll_interval_minutes }}" min="5" max="1440"></label>
+    </div>
+    <div class="row">
+      <label>Connection timeout (seconds) <input type="number" name="timeout_seconds" value="{{ cfg.email.timeout_seconds }}" min="5" max="120"></label>
+      <label>Status window (days) <input type="number" name="status_window_days" value="{{ cfg.email.status_window_days }}" min="1" max="365"></label>
+    </div>
+    <label class="check"><input type="checkbox" name="auto_poll" value="1" {{ 'checked' if cfg.email.auto_poll else '' }}> Sync automatically while the dashboard is open</label>
+    <label>App password <span class="muted">(stored in the OS keychain; never in config, SQLite, exports, or logs)</span>
+      <input type="password" name="password" autocomplete="new-password" placeholder="{{ 'leave blank to keep the saved password' if email_password_source else 'Gmail app password' }}">
+    </label>
+    {% if email_password_source %}
+    <label class="check"><input type="checkbox" name="clear_password" value="1"> Remove the saved password</label>
+    <p class="setup-note">Password source: <strong>{{ email_password_source }}</strong>. Environment variables take priority.</p>
+    {% endif %}
+    <div class="actions">
+      <button class="primary">Save email sync</button>
+      <button type="submit" formaction="/email/test" formmethod="post">Test connection</button>
+    </div>
+  </form>
+  <p class="setup-note">Gmail: enable 2-Step Verification, then create an App Password for Mail. Use that app password here. JobForge uses IMAP over TLS, opens the folder read-only, and fetches with <code>BODY.PEEK[]</code> so your unread state is untouched. <strong>No secret is displayed.</strong></p>
+  <p class="muted small">
+    {% if email_last_poll %}
+    Last sync {{ email_last_poll.at[:16] if email_last_poll.at else '' }}
+    · {{ email_last_poll.fetched or 0 }} fetched
+    · {{ email_last_poll.status_changes or 0 }} status change{{ '' if (email_last_poll.status_changes or 0) == 1 else 's' }}
+    {% if email_last_poll.error %}· error: {{ email_last_poll.error|short(160) }}{% endif %}
+    {% else %}
+    No sync has run yet.
+    {% endif %}
+  </p>
 </section>
 
 <section class="panel" id="imports">

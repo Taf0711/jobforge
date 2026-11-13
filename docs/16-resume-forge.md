@@ -84,9 +84,12 @@ Tailored output now uses the refined resume-forge Typst language from
 
 - header: 20pt small-caps name; phone, email, LinkedIn, GitHub, and explicit
   U.S. citizenship;
-- section order: Education → Experience → Projects → Technical Skills;
-- education: institution, date range, degree/major, location, first eight
-  relevant courses;
+- section order: Summary (when non-empty) → Education → Experience → Projects →
+  Technical Skills;
+- education: institution, date range, degree/major, location, and the first
+  eight relevant courses. Course lines are parsed from wrapped PDF text, kept
+  when a re-import cannot see them, and filled read-only from the source resume
+  for profiles imported before course parsing existed;
 - experience: company/role/location/date range with verified bullets; the base
   three roles stay on the page and later profile entries (e.g. mentorship)
   remain off it;
@@ -94,10 +97,18 @@ Tailored output now uses the refined resume-forge Typst language from
 - skills: resume-forge categories (Languages, Technologies, Concepts,
   Developer Tools), JD terms pulled forward, exact base ordering otherwise;
 - margins/fonts: 0.12in vertical, 0.2in horizontal, New Computer Modern 11pt,
-  9pt bullets, 8pt skills; no summary or certifications.
+  9pt bullets, 8pt skills; no certifications.
 
 If the full layout exceeds one page, `template_compact.typ` keeps the same
 hierarchy with tighter margins/font; the ATS gate blocks a two-page result.
+When the content is shorter than the page, the renderer distributes the leftover
+height into line and section spacing instead of leaving a blank band at the
+bottom. It never adds content to do this.
+
+The tailored PDF is written as `<First>_<Last>_Resume.pdf`. The dashboard
+artifact route serves it with `Content-Disposition: inline` so the browser
+previews it, and the same human-readable basename is what an ATS sees when the
+fill browser uploads it.
 
 ## Scoring gates folded in
 

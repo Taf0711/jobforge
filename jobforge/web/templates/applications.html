@@ -2,36 +2,84 @@
 {% block title %}Applications · JobForge{% endblock %}
 {% block content %}
 <section class="page-head">
-  <div><h1>Applications</h1></div>
+  <div>
+    <p class="eyebrow">Tracker</p>
+    <h1>Applications</h1>
+    <p class="muted">Every application, its current stage, and the last employer signal from your inbox.</p>
+  </div>
+  <div class="actions">
+    {% if email_ready %}
+    <form method="post" action="/email/poll"><button class="primary">Sync inbox</button></form>
+    {% else %}
+    <a class="button" href="/settings#email">Connect email</a>
+    {% endif %}
+    <a class="button" href="/inbox">Inbox{% if email_tracker.unmatched %} <span class="pill warn">{{ email_tracker.unmatched }}</span>{% endif %}</a>
+  </div>
+</section>
+
+<section class="stat-strip" aria-label="Application summary">
+  <div class="stat-cell"><strong>{{ apps|length }}</strong><span>tracked</span></div>
+  <div class="stat-cell"><strong>{{ status_counts.get('submitted', 0) + status_counts.get('screening', 0) }}</strong><span>in process</span></div>
+  <div class="stat-cell"><strong>{{ status_counts.get('interview', 0) }}</strong><span>interviews</span></div>
+  <div class="stat-cell"><strong>{{ status_counts.get('offer', 0) }}</strong><span>offers</span></div>
+  <div class="stat-cell"><strong>{{ email_tracker.unmatched }}</strong><span>emails to review</span></div>
 </section>
 
 <section class="panel">
-  <div class="panel-head"><h2>{{ apps|length }} record{{ '' if apps|length == 1 else 's' }}</h2><span class="muted">Status is yours to update; email polling can suggest changes.</span></div>
+  <div class="panel-head">
+    <h2>{{ apps|length }} record{{ '' if apps|length == 1 else 's' }}</h2>
+    <span class="muted">
+      {% if email_last_poll %}
+      Last sync {{ email_last_poll.at[:16] if email_last_poll.at else '' }}
+      · {{ email_last_poll.status_changes or 0 }} change{{ '' if (email_last_poll.status_changes or 0) == 1 else 's' }}
+      {% else %}
+      Email sync has not run yet.
+      {% endif %}
+    </span>
+  </div>
   {% if apps %}
-  <table>
-    <thead><tr><th>Company</th><th>Role</th><th>ATS</th><th>Status</th><th>Updated</th><th>Resume</th></tr></thead>
+  <table class="table-cards tracker-table">
+    <thead><tr><th>Company / role</th><th>Stage</th><th>Last email</th><th>Last change</th><th>Resume</th></tr></thead>
     <tbody>
     {% for app in apps %}
       <tr>
-        <td><a href="/jobs/{{ app.job_id }}">{{ app.company }}</a></td>
-        <td>{{ app.title }}</td>
-        <td class="muted">{{ app.ats or '—' }}</td>
-        <td>
+        <td data-label="Company / role">
+          <a class="role-title" href="/applications/{{ app.id }}">{{ app.company }}</a>
+          <div class="muted">{{ app.title }}</div>
+        </td>
+        <td data-label="Stage">
           <form method="post" action="/applications/{{ app.id }}/status" class="inline">
             <select name="status" data-autosubmit aria-label="Application status">
               {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if app.status == s else '' }}>{{ s }}</option>{% endfor %}
             </select>
             <noscript><button class="ghost">Update</button></noscript>
           </form>
+          {% if app.status_source == 'email' %}<div class="pill email-source">via email</div>{% endif %}
         </td>
-        <td class="muted">{{ app.updated_at[:16] }}</td>
-        <td>{% if app.resume_path %}<a class="link" href="/artifacts/{{ app.id }}/resume">PDF</a>{% else %}—{% endif %}</td>
+        <td data-label="Last email">
+          {% if app.last_email_at %}
+            <span class="pill cat-{{ app.last_email_category }}">{{ app.last_email_category or 'email' }}</span>
+            <div class="muted small">{{ app.last_email_at[:16] }}</div>
+            <div class="muted small">{{ app.last_email_subject|short(70) }}</div>
+          {% else %}
+            <span class="muted">No matched email</span>
+          {% endif %}
+        </td>
+        <td data-label="Last change">
+          <span class="muted">{{ app.updated_at[:16] }}</span>
+          {% if app.email_change_count %}<div class="pill">{{ app.email_change_count }} email change{{ '' if app.email_change_count == 1 else 's' }}</div>{% endif %}
+        </td>
+        <td data-label="Resume">{% if app.resume_path %}<a class="link" href="/artifacts/{{ app.id }}/resume" target="_blank" rel="noopener">PDF</a>{% else %}—{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   {% else %}
-  <p class="empty">No applications yet. Tailor a resume from a job page to create a draft.</p>
+  <div class="empty-action">
+    <strong>No applications yet.</strong>
+    <p>Tailor a resume from a job page to create a draft. Once you apply, email sync advances the stage when an employer replies.</p>
+    <a class="button" href="/jobs">Find a role</a>
+  </div>
   {% endif %}
 </section>
 {% endblock %}

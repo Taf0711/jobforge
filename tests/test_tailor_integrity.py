@@ -115,7 +115,7 @@ def test_tailor_resume_writes_separate_artifacts_per_profile(
 
     seen: list[Path] = []
 
-    def fake_render(data, out_dir, template=None):
+    def fake_render(data, out_dir, template=None, **kwargs):
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         seen.append(out_dir)
@@ -159,10 +159,9 @@ def test_tailor_resume_writes_separate_artifacts_per_profile(
         )
         tailor_resume(profile, job, tmp_path, write_cover_letter=False)
 
-    assert len(seen) == 2
-    assert seen[0] != seen[1]
-    assert "profile-1" in seen[0].parts
-    assert "profile-2" in seen[1].parts
+    unique = list(dict.fromkeys(seen))
+    assert len(unique) == 2
+    assert {path.parts[-3] for path in unique} == {"profile-1", "profile-2"}
 
 
 def test_trim_render_data_deep_copies_without_error():

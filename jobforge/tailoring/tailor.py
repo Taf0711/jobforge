@@ -5,9 +5,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 
 import pymupdf
 from dataclasses import dataclass, field
@@ -17,6 +19,7 @@ from typing import Any
 from ..models import Job, Profile, slugify
 from ..matching.archetypes import ArchetypeMatch, detect_archetype
 from ..matching.jd import JD, parse_jd
+from ..matching.resume import education_with_resume_courses
 from ..matching.skills import GRAPH_PATH, SkillGraph, extract_skills
 from .ats_check import ats_check
 from .llm import COVER_LETTER_SYSTEM, GROUNDING_SYSTEM, LLMClient
@@ -24,6 +27,30 @@ from .llm_resume import generate_llm_resume
 
 TEMPLATE = Path(__file__).with_name("template.typ")
 COMPACT_TEMPLATE = Path(__file__).with_name("template_compact.typ")
+NORMAL_STYLE = {
+    "font_size": 11,
+    "leading": 0.35,
+    "section_gap": 10,
+    "entry_gap": 5,
+    "bullet_gap": 2.5,
+}
+COMPACT_STYLE = {
+    "font_size": 10,
+    "leading": 0.28,
+    "section_gap": 7,
+    "entry_gap": 4,
+    "bullet_gap": 1.5,
+}
+# How much extra space a one-page render may distribute when the content is
+# shorter than the page. Font size is fixed; only breathing room changes.
+FILL_LIMITS = {
+    "leading": 0.15,
+    "section_gap": 8,
+    "entry_gap": 6,
+    "bullet_gap": 4,
+}
+PAGE_HEIGHT = 792.0  # US Letter, points
+BOTTOM_SAFETY = 12.0
 NUMBER = re.compile(r"\b\d[\d,.]*\b")
 STOPWORDS = {
     "the", "and", "for", "with", "that", "this", "from", "your", "you", "our", "are", "will",
@@ -41,6 +68,7 @@ class TailorResult:
     cover_letter_path: str = ""
     ats: dict[str, Any] = field(default_factory=dict)
     selected_fact_ids: list[str] = field(default_factory=list)
+    export_path: str = ""
     summary: str = ""
     warnings: list[str] = field(default_factory=list)
     llm_used: bool = False
@@ -411,7 +439,7 @@ def build_data(
             "end": _display_date(e.get("end") or e.get("graduation")),
             "courses": list(e.get("courses") or e.get("relevant_courses") or [])[:8],
         }
-        for e in profile.education
+        for e in education_with_resume_courses(profile)
     ]
 
     certifications = [
@@ -530,12 +558,21 @@ def cover_letter(profile: Profile, job: Job, jd: JD, llm: LLMClient | None) -> s
     )
 
 
-def render(data: dict[str, Any], out_dir: Path, template: Path = TEMPLATE) -> tuple[Path, Path, Path]:
+def render(
+    data: dict[str, Any],
+    out_dir: Path,
+    template: Path = TEMPLATE,
+    *,
+    style: dict[str, Any] | None = None,
+    filename: str = "resume.pdf",
+) -> tuple[Path, Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     data_path = out_dir / "data.json"
     typ_path = out_dir / "resume.typ"
-    pdf_path = out_dir / "resume.pdf"
-    data_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    pdf_path = out_dir / filename
+    payload = copy.deepcopy(data)
+    payload["style"] = dict(style or {})
+    data_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     shutil.copyfile(template, typ_path)
     result = subprocess.run(
         ["typst", "compile", str(typ_path.name), str(pdf_path.name)],
@@ -546,6 +583,118 @@ def render(data: dict[str, Any], out_dir: Path, template: Path = TEMPLATE) -> tu
     if result.returncode != 0:
         raise RuntimeError(f"Typst compile failed: {result.stderr.strip()[:1000]}")
     return pdf_path, typ_path, data_path
+
+
+def resume_filename(profile: Profile) -> str:
+    """Human-shaped upload name: First_Last_Resume.pdf.
+
+    Playwright sends the on-disk basename to ATS upload controls, so this is
+    what a recruiter sees after the agent fills a form.
+    """
+    first = str(profile.first_name or "").strip()
+    last = str(profile.last_name or "").strip()
+    name = (
+        " ".join(part for part in (first, last) if part)
+        or str(profile.full_name or "").strip()
+        or str(profile.name or "").strip()
+    )
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+    return f"{safe}_Resume.pdf" if safe else "Resume.pdf"
+
+
+def export_resume_filename(profile: Profile, job: Job) -> str:
+    """Stable, role-scoped filename for a copy in the session workspace."""
+    base = resume_filename(profile)
+    stem = base[:-4] if base.lower().endswith(".pdf") else base
+    if stem.endswith("_Resume"):
+        stem = stem[: -len("_Resume")]
+    role = re.sub(r"[^A-Za-z0-9]+", "_", job.title or "").strip("_")
+    role = role[:60].strip("_")
+    return f"{stem}_{role}_Resume.pdf" if role else base
+
+
+def export_pdf(
+    pdf_path: Path, destination: str | Path, profile: Profile, job: Job
+) -> Path:
+    """Copy the final PDF into a user/agent workspace atomically."""
+    dest = Path(destination).expanduser()
+    if not dest.is_absolute() or not dest.is_dir():
+        raise ValueError(f"Export directory does not exist: {dest}")
+    target = dest / export_resume_filename(profile, job)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=dest, prefix=f".{target.name}.", suffix=".tmp", delete=False
+        ) as handle:
+            temp_path = Path(handle.name)
+        shutil.copyfile(pdf_path, temp_path)
+        os.replace(temp_path, target)
+        return target
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+def _pdf_bottom(pdf_path: Path) -> tuple[int, float]:
+    try:
+        doc = pymupdf.open(pdf_path)
+    except Exception:  # noqa: BLE001 - a fake renderer or unreadable PDF
+        return 0, 0.0
+    try:
+        if not doc:
+            return 0, 0.0
+        blocks = [block for block in doc[0].get_text("blocks") if block[4].strip()]
+        return doc.page_count, max((block[3] for block in blocks), default=0.0)
+    finally:
+        doc.close()
+
+
+def _style_at(base: dict[str, Any], scale: float) -> dict[str, Any]:
+    return {
+        key: round(value + scale * FILL_LIMITS.get(key, 0), 3)
+        for key, value in base.items()
+    }
+
+
+def _fill_one_page(
+    data: dict[str, Any],
+    out_dir: Path,
+    template: Path,
+    base_style: dict[str, Any],
+    filename: str,
+) -> tuple[Path, Path, Path]:
+    """Widen line and section spacing until the page is full.
+
+    The resume must stay one page. This only changes typography: it never adds
+    or removes a fact. If the base render already overflows, the caller's
+    trimming path decides what to render; here we simply return it unchanged.
+    """
+    pdf_path, typ_path, data_path = render(
+        data, out_dir, template, style=base_style, filename=filename
+    )
+    pages, bottom = _pdf_bottom(pdf_path)
+    if pages != 1 or bottom >= PAGE_HEIGHT - BOTTOM_SAFETY - 4:
+        return pdf_path, typ_path, data_path
+
+    limit = PAGE_HEIGHT - BOTTOM_SAFETY
+    best = (pdf_path, typ_path, data_path)
+    low, high = 0.0, 1.0
+    for _ in range(5):
+        scale = (low + high) / 2
+        trial = render(
+            data,
+            out_dir,
+            template,
+            style=_style_at(base_style, scale),
+            filename=filename,
+        )
+        trial_pages, trial_bottom = _pdf_bottom(trial[0])
+        if trial_pages == 1 and trial_bottom <= limit:
+            low = scale
+            best = trial
+        else:
+            high = scale
+    return best
 
 
 def _output_dir_name(job: Job) -> str:
@@ -613,6 +762,7 @@ def tailor_resume(
     write_cover_letter: bool = True,
     archetypes: dict[str, dict[str, Any]] | None = None,
     mode: str = "auto",
+    export_dir: str | Path | None = None,
 ) -> TailorResult:
     missing = [
         field
@@ -655,18 +805,32 @@ def tailor_resume(
                 raise ValueError(f"LLM tailoring failed: {detail}")
     source_ids = llm_source_ids if llm_source_ids else fact_ids
     out_dir = _output_dir_for(profile, job, output_root)
-    pdf_path, typ_path, data_path = render(data, out_dir, template=TEMPLATE)
+    filename = resume_filename(profile)
+    used_template = TEMPLATE
+    used_style = NORMAL_STYLE
+    pdf_path, typ_path, data_path = render(
+        data, out_dir, template=used_template, style=used_style, filename=filename
+    )
     ats = ats_check(pdf_path)
     if ats.get("pages", 0) > 1:
         # Keep the same resume-forge visual language, only tighten spacing/font
         # enough to preserve the one-page requirement.
-        pdf_path, typ_path, data_path = render(data, out_dir, template=COMPACT_TEMPLATE)
+        used_template = COMPACT_TEMPLATE
+        used_style = COMPACT_STYLE
+        pdf_path, typ_path, data_path = render(
+            data, out_dir, template=used_template, style=used_style, filename=filename
+        )
         ats = ats_check(pdf_path)
     if ats.get("pages", 0) > 1:
         # If the compact layout is still too tall, remove only already-selected
         # content in progressively tighter steps. Never synthesize a replacement
-        # bullet or skill. The first candidate usually fits a full profile.
+        # bullet or skill. Reduce bullets before dropping whole projects, so a
+        # resume keeps its breadth when only a line or two is over budget.
         for attempt in (
+            (4, 3, 3, 4, 6),
+            (4, 2, 3, 4, 6),
+            (3, 3, 3, 4, 6),
+            (3, 2, 3, 4, 6),
             (3, 3, 2, 4, 6),
             (3, 2, 2, 4, 6),
             (2, 2, 2, 3, 6),
@@ -683,11 +847,17 @@ def tailor_resume(
                 items_per_group=attempt[4],
             )
             candidate_pdf, candidate_typ, candidate_data = render(
-                candidate, out_dir, template=COMPACT_TEMPLATE
+                candidate,
+                out_dir,
+                template=COMPACT_TEMPLATE,
+                style=COMPACT_STYLE,
+                filename=filename,
             )
             candidate_ats = ats_check(candidate_pdf)
             if candidate_ats.get("pages", 0) <= 1:
                 data = candidate
+                used_template = COMPACT_TEMPLATE
+                used_style = COMPACT_STYLE
                 pdf_path, typ_path, data_path = (
                     candidate_pdf,
                     candidate_typ,
@@ -695,6 +865,13 @@ def tailor_resume(
                 )
                 ats = candidate_ats
                 break
+
+    # A one-page resume with a short content stack leaves a visible blank band
+    # at the bottom. Spend that space on even leading and section spacing.
+    pdf_path, typ_path, data_path = _fill_one_page(
+        data, out_dir, used_template, used_style, filename
+    )
+    ats = ats_check(pdf_path)
 
     cover_path = ""
     if write_cover_letter:
@@ -711,6 +888,10 @@ def tailor_resume(
         doc.close()
         cover_path = str(cover_pdf)
 
+    export_path = ""
+    if export_dir:
+        export_path = str(export_pdf(pdf_path, export_dir, profile, job))
+
     warnings = list(llm_warnings) + list(ats.get("warnings", []))
     if not profile.facts:
         warnings.append("No fact bank found; bullets were copied from the parsed resume without selection")
@@ -721,6 +902,7 @@ def tailor_resume(
         cover_letter_path=cover_path,
         ats=ats,
         selected_fact_ids=source_ids,
+        export_path=export_path,
         summary=str(data.get("summary") or ""),
         warnings=warnings,
         llm_used=llm_used,

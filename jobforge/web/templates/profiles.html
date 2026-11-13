@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Profiles · JobForge{% endblock %}
 {% block content %}
+{% macro tri(name, label, value) %}
+<label>{{ label }}
+  <select name="{{ name }}">
+    <option value="unknown" {{ 'selected' if value is none else '' }}>Not set</option>
+    <option value="yes" {{ 'selected' if value is sameas true else '' }}>Yes</option>
+    <option value="no" {{ 'selected' if value is sameas false else '' }}>No</option>
+  </select>
+</label>
+{% endmacro %}
+{% set wa = profile.work_auth or {} %}
 <section class="page-head">
   <div><p class="eyebrow">You</p><h1>Profiles</h1></div>
 </section>
@@ -42,6 +52,52 @@
     </tbody></table>
   </div>
 </section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Work authorization</h2><span class="muted">Used by hard gates and screening answers</span></div>
+  <p class="muted">Unknown leaves a gap; it does not zero a role. Set <strong>No</strong> only when that is confirmed.</p>
+  <form method="post" action="/profiles/work-auth" class="stack">
+    <div class="row">
+      {{ tri('us_citizen', 'US citizen', wa.get('us_citizen')) }}
+      {{ tri('itar_eligible', 'ITAR eligible (US person)', wa.get('itar_eligible')) }}
+    </div>
+    <div class="row">
+      {{ tri('clearance_eligible', 'Clearance eligible', wa.get('clearance_eligible')) }}
+      {{ tri('authorized', 'Legally authorized to work in the US', wa.get('authorized', wa.get('work_authorized_us'))) }}
+    </div>
+    <div class="row">
+      {{ tri('needs_sponsorship', 'Need visa sponsorship', wa.get('needs_sponsorship', prefs.needs_sponsorship)) }}
+      <label>Current clearance
+        <select name="clearance">
+          <option value="" {{ 'selected' if not wa.get('clearance') else '' }}>Not set</option>
+          <option value="none" {{ 'selected' if wa.get('clearance') == 'none' else '' }}>None</option>
+          <option value="public trust" {{ 'selected' if wa.get('clearance') == 'public trust' else '' }}>Public Trust</option>
+          <option value="secret" {{ 'selected' if wa.get('clearance') == 'secret' else '' }}>Secret</option>
+          <option value="ts/sci" {{ 'selected' if wa.get('clearance') == 'ts/sci' else '' }}>TS/SCI</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>GPA <span class="muted">(optional)</span>
+        <input type="number" name="gpa" value="{{ wa.get('gpa', '') }}" min="0" max="10" step="0.01" placeholder="e.g. 3.5">
+      </label>
+    </div>
+    <div class="actions"><button class="primary">Save and rescore</button></div>
+  </form>
+</section>
+
+{% if education %}
+<section class="panel">
+  <div class="panel-head"><h2>Education</h2><span class="muted">Parsed from your resume</span></div>
+  {% for e in education %}
+    <div class="entry">
+      <strong>{{ e.institution }}</strong>
+      <span class="muted">{% if e.degree %}{{ e.degree }}{% if e.major %} in {{ e.major }}{% endif %}{% endif %}{% if e.start or e.end %} · {{ e.start }}{% if e.end %} – {{ e.end }}{% endif %}{% endif %}{% if e.location %} · {{ e.location }}{% endif %}</span>
+      {% if e.courses %}<p class="muted"><strong>Courses:</strong> {{ e.courses|join(', ') }}</p>{% endif %}
+    </div>
+  {% endfor %}
+</section>
+{% endif %}
 
 {% if profile.experience %}
 <section class="panel">

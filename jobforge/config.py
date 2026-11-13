@@ -29,11 +29,11 @@ def _get(data: dict[str, Any], path: str, default: Any = None) -> Any:
     return cur
 
 
-def _resolve(value: str | None) -> Path | None:
+def _resolve(value: str | None, base: Path | None = None) -> Path | None:
     if not value:
         return None
     p = Path(value).expanduser()
-    return p if p.is_absolute() else (base_dir() / p)
+    return p if p.is_absolute() else ((base or base_dir()) / p)
 
 
 @dataclass
@@ -85,12 +85,20 @@ class EmailConfig:
     password_env: str = "JOBFORGE_IMAP_PASSWORD"
     folder: str = "INBOX"
     lookback_days: int = 30
+    auto_poll: bool = True
+    poll_interval_minutes: int = 15
+    max_messages: int = 200
+    timeout_seconds: int = 20
+    status_window_days: int = 60
+    secret_dir: str = ""
     verification_domains: list[str] = field(default_factory=list)
     verification_senders: list[str] = field(default_factory=list)
 
     @property
     def password(self) -> str:
-        return _env(self.password_env)
+        from .email.credentials import load_password
+
+        return load_password(self)
 
 
 @dataclass
@@ -187,6 +195,7 @@ class Config:
             self.data_dir / "uploads",
             self.data_dir / "screenshots",
             self.data_dir / "connections" / "providers",
+            self.data_dir / "connections" / "email",
         ):
             p.mkdir(parents=True, exist_ok=True)
 
@@ -228,9 +237,18 @@ def load_config(path: str | Path | None = None) -> Config:
         data = _defaults()
         config_path = None
 
+    # Relative paths in a config file are relative to that file, not the
+    # process cwd. This keeps an installed app pointed at its app home even
+    # when a host agent starts it from a different directory.
+    path_base = config_path.parent if config_path is not None else base_dir()
+
     # Environment overrides for paths and local-only settings.
-    data_dir = _resolve(_env("JOBFORGE_DATA_DIR") or _get(data, "data_dir", "data")) or (base_dir() / "data")
-    output_dir = _resolve(_env("JOBFORGE_OUTPUT_DIR") or _get(data, "output_dir", "output")) or (base_dir() / "output")
+    data_dir = _resolve(
+        _env("JOBFORGE_DATA_DIR") or _get(data, "data_dir", "data"), path_base
+    ) or (path_base / "data")
+    output_dir = _resolve(
+        _env("JOBFORGE_OUTPUT_DIR") or _get(data, "output_dir", "output"), path_base
+    ) or (path_base / "output")
     db_path = _resolve(_env("JOBFORGE_DB")) or (data_dir / "jobforge.sqlite3")
 
     llm = LLMConfig(
@@ -252,13 +270,20 @@ def load_config(path: str | Path | None = None) -> Config:
         password_env=_get(data, "email.password_env", "JOBFORGE_IMAP_PASSWORD"),
         folder=_get(data, "email.folder", "INBOX"),
         lookback_days=int(_get(data, "email.lookback_days", 30)),
+        auto_poll=bool(_get(data, "email.auto_poll", True)),
+        poll_interval_minutes=max(5, int(_get(data, "email.poll_interval_minutes", 15))),
+        max_messages=max(1, min(1000, int(_get(data, "email.max_messages", 200)))),
+        timeout_seconds=max(5, min(120, int(_get(data, "email.timeout_seconds", 20)))),
+        status_window_days=max(1, min(365, int(_get(data, "email.status_window_days", 60)))),
+        secret_dir=str(data_dir / "connections" / "email"),
         verification_domains=list(_get(data, "email.verification_domains", []) or []),
         verification_senders=list(_get(data, "email.verification_senders", []) or []),
     )
 
     browser_user_data = _resolve(
-        _env("JOBFORGE_BROWSER_DIR") or _get(data, "browser.user_data_dir", "data/browser")
-    ) or (base_dir() / "data" / "browser")
+        _env("JOBFORGE_BROWSER_DIR") or _get(data, "browser.user_data_dir", "data/browser"),
+        path_base,
+    ) or (path_base / "data" / "browser")
     browser = BrowserConfig(
         headless=bool(_get(data, "browser.headless", False)),
         user_data_dir=str(browser_user_data),
@@ -278,8 +303,8 @@ def load_config(path: str | Path | None = None) -> Config:
         data_dir=data_dir,
         output_dir=output_dir,
         db_path=db_path,
-        profile_path=_resolve(_get(data, "profile")),
-        resume_path=_resolve(_get(data, "resume")),
+        profile_path=_resolve(_get(data, "profile"), path_base),
+        resume_path=_resolve(_get(data, "resume"), path_base),
         sources=dict(_get(data, "sources", {}) or {}),
         preferences=dict(_get(data, "preferences", {}) or {}),
         llm=llm,

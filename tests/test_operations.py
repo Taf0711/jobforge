@@ -488,3 +488,79 @@ def test_worker_expires_an_old_submission_approval(tmp_path: Path, monkeypatch):
         conn.close()
 
     assert result["state"] == "expired"
+
+
+def test_worker_passes_the_export_directory_to_tailor(tmp_path: Path, monkeypatch):
+    cfg, profile_id, job_id, connection_id, _operation = _seed(tmp_path)
+    export_dir = tmp_path / "resume_set"
+    export_dir.mkdir()
+    conn = db.connect(cfg.db_path)
+    operation = db.create_agent_operation(
+        conn,
+        connection_id=connection_id,
+        profile_id=profile_id,
+        action="render_resume",
+        payload={"job_id": job_id, "export_dir": str(export_dir)},
+        idempotency_key="export-test-1",
+    )
+    db.approve_agent_operation(conn, operation["id"])
+    conn.close()
+    seen = {}
+
+    def fake_tailor(
+        config, connection, requested_job_id, *, profile_id=None, export_dir=None
+    ):
+        seen["export_dir"] = export_dir
+        return {
+            "application_id": 42,
+            "ats": {"ok": True},
+            "facts": 0,
+            "export_path": str(Path(export_dir) / "Tafseer_Haque_Backend_Engineer_Resume.pdf"),
+            "warnings": [],
+            "llm_used": False,
+            "llm_model": "",
+            "mode": "deterministic",
+        }
+
+    monkeypatch.setattr("jobforge.workbench.worker.services.tailor_job", fake_tailor)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = run_operation(cfg, conn, operation["id"])
+    finally:
+        conn.close()
+
+    assert seen["export_dir"] == str(export_dir)
+    assert result["state"] == "succeeded"
+    assert result["result"]["export_path"].endswith("_Resume.pdf")
+
+
+def test_expire_stale_agent_operations(tmp_path: Path):
+    cfg, profile_id, job_id, connection_id, _operation = _seed(tmp_path)
+    conn = db.connect(cfg.db_path)
+    stale = db.create_agent_operation(
+        conn,
+        connection_id=connection_id,
+        profile_id=profile_id,
+        action="render_resume",
+        payload={"job_id": job_id},
+        idempotency_key="stale-operation-1",
+        ttl_minutes=1,
+    )
+    conn.execute(
+        "UPDATE agent_operations SET expires_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+        (stale["id"],),
+    )
+    conn.commit()
+
+    expired = db.expire_stale_agent_operations(conn)
+
+    assert expired >= 1
+    refreshed = db.get_agent_operation(conn, stale["id"])
+    assert refreshed["state"] == "expired"
+    assert refreshed["finished_at"]
+    events = conn.execute(
+        "SELECT kind FROM agent_operation_events WHERE operation_id=? ORDER BY seq",
+        (stale["id"],),
+    ).fetchall()
+    assert "expired" in [row["kind"] for row in events]
+    conn.close()

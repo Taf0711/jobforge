@@ -23,6 +23,7 @@ class ApplicationStatus(str, Enum):
     DRAFT = "draft"
     PREPARED = "prepared"
     SUBMITTED = "submitted"
+    SCREENING = "screening"
     INTERVIEW = "interview"
     OFFER = "offer"
     REJECTED = "rejected"
@@ -33,6 +34,7 @@ class ApplicationStatus(str, Enum):
 class EmailCategory(str, Enum):
     VERIFICATION = "verification"
     CONFIRMATION = "confirmation"
+    ASSESSMENT = "assessment"
     INTERVIEW = "interview"
     OFFER = "offer"
     REJECTION = "rejection"
@@ -201,6 +203,7 @@ class Application:
     job_id: int | None = None
     profile_id: int | None = None
     status: str = ApplicationStatus.DRAFT.value
+    status_source: str = "manual"
     ats: str = ""
     resume_path: str = ""
     cover_letter_path: str = ""
@@ -225,3 +228,9 @@ class EmailMessage:
     category: str = EmailCategory.OTHER.value
     verification_code: str = ""
     forwarded: bool = False
+    match_score: float = 0.0
+    match_reason: str = ""
+    match_source: str = ""
+    status_before: str = ""
+    status_after: str = ""
+    processed_at: str = ""

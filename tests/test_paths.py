@@ -72,3 +72,22 @@ def test_browser_channel_is_parsed(monkeypatch, tmp_path: Path):
 
     assert load_config().browser.channel == "chrome"
     assert BrowserConfig().channel == ""
+
+def test_relative_config_paths_resolve_to_the_config_file_directory(monkeypatch, tmp_path: Path):
+    custom = tmp_path / "custom-home"
+    custom.mkdir()
+    config_path = custom / "config.yml"
+    config_path.write_text(
+        "data_dir: data\noutput_dir: output\nbrowser:\n  user_data_dir: data/browser\n",
+        encoding="utf-8",
+    )
+    # Simulate a source checkout cwd: base_dir() would point somewhere else.
+    monkeypatch.setattr(paths, "source_root", lambda: tmp_path / "checkout")
+    (tmp_path / "checkout").mkdir()
+
+    config = load_config(config_path)
+
+    assert config.data_dir == custom / "data"
+    assert config.output_dir == custom / "output"
+    assert Path(config.browser.user_data_dir) == custom / "data" / "browser"
+    assert config.db_path == custom / "data" / "jobforge.sqlite3"

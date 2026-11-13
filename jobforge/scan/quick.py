@@ -302,12 +302,12 @@ def filter_job(
     now = datetime.now(timezone.utc)
     for app in applications or []:
         status = str(app.get("status") or "").lower()
-        if status not in {"submitted", "interview", "offer", "rejected"}:
+        if status not in {"submitted", "screening", "interview", "offer", "rejected"}:
             continue
         if not _similar_company(company, str(app.get("company") or "")):
             continue
         same_role = _similar_title(title, str(app.get("title") or ""))
-        if status in {"submitted", "interview", "offer"} and same_role:
+        if status in {"submitted", "screening", "interview", "offer"} and same_role:
             return False, "already applied"
         if status == "rejected":
             updated = _parse_dt(app.get("updated_at") or app.get("submitted_at"))

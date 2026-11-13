@@ -53,3 +53,13 @@ def test_ssrf_guard_rejects_localhost():
         assert_public_url("http://127.0.0.1:8080/")
     with pytest.raises(SourceError):
         assert_public_url("file:///etc/passwd")
+
+def test_parity_checks_are_current():
+    import sqlite3
+
+    from jobforge.audit.parity import run_parity
+
+    result = run_parity(None, sqlite3.connect(":memory:"))
+
+    assert result["missing"] == []
+    assert result["implemented"] == result["total_checks"]

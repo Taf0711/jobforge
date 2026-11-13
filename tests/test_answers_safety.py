@@ -142,3 +142,45 @@ def test_resume_forge_work_auth_keys_are_honored():
     assert authorized.category == "work_authorization"
     assert sponsorship.value == "No"
     assert sponsorship.category == "sponsorship"
+
+
+def test_years_experience_yes_no_uses_the_confirmed_preference():
+    bank = AnswerBank()
+    prefs = Preferences(years_of_experience=1, years_experience_confirmed=True)
+
+    answer = bank.answer(
+        "Do you have 3+ years of relevant non-internship professional experience?",
+        Profile(),
+        prefs,
+    )
+    assert answer.value == "No"
+    assert answer.category == "years_experience"
+
+    shorter = bank.answer("Do you have at least 1 year of experience?", Profile(), prefs)
+    assert shorter.value == "Yes"
+
+
+def test_years_experience_how_many_returns_the_confirmed_number():
+    bank = AnswerBank()
+    prefs = Preferences(years_of_experience=1, years_experience_confirmed=True)
+
+    answer = bank.answer(
+        "How many years of professional experience do you have?", Profile(), prefs
+    )
+
+    assert answer.value == "1"
+    assert answer.category == "years_experience"
+
+
+def test_years_experience_is_not_guessed_when_unconfirmed():
+    bank = AnswerBank()
+    prefs = Preferences(years_of_experience=3, years_experience_confirmed=False)
+
+    answer = bank.answer(
+        "Do you have 3+ years of relevant non-internship professional experience?",
+        Profile(),
+        prefs,
+    )
+
+    assert answer.value == ""
+    assert answer.category == "years_experience"

@@ -44,6 +44,10 @@ URL = re.compile(r"https?://[^\s)>\]]+")
 LINKEDIN = re.compile(r"(?:linkedin\.com/in/|linkedin\.com/pub/)[^\s,;]+", re.IGNORECASE)
 GITHUB = re.compile(r"(?:github\.com/)[^\s,;]+", re.IGNORECASE)
 BULLET = re.compile(r"^\s*(?:[•●▪◦*\-–—]|\d+[.)])\s+")
+COURSES = re.compile(
+    r"^\s*(?:[•●▪◦*\-–—]|\d+[.)])?\s*(?:relevant\s+)?(?:coursework|courses)\s*[:\-–—]\s*(.*)$",
+    re.IGNORECASE,
+)
 
 
 def extract_text(path: str | Path) -> str:
@@ -197,12 +201,51 @@ def _parse_experience(block: str) -> list[dict[str, Any]]:
     return entries
 
 
+def _course_values(value: str) -> list[str]:
+    courses = []
+    for item in re.split(r"[,;]", value):
+        item = re.sub(r"\s+", " ", item).strip(" .;")
+        if item:
+            courses.append(item)
+    return courses
+
+
 def _parse_education(block: str) -> list[dict[str, Any]]:
     lines = _clean_lines(block)
     entries: list[dict[str, Any]] = []
+    pending_courses: list[str] = []
     i = 0
     while i < len(lines):
         line = lines[i]
+        # A course list often wraps across lines in the PDF text layer
+        # ("Database\nManagement, Software Engineering"). Collect the marker
+        # line plus its continuation before the normal entry parser skips it.
+        marker = COURSES.match(line)
+        if marker:
+            value = marker.group(1).strip()
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j]
+                if BULLET.match(nxt) or DATE_RANGE.search(nxt) or COURSES.match(nxt):
+                    break
+                if nxt.rstrip().endswith("."):
+                    break
+                # A new institution is usually followed by its date line.
+                if (
+                    j + 1 < len(lines)
+                    and DATE_RANGE.search(lines[j + 1])
+                    and not nxt.rstrip().endswith(",")
+                ):
+                    break
+                value += " " + nxt.strip()
+                j += 1
+            courses = _course_values(value)
+            if entries:
+                entries[-1].setdefault("courses", []).extend(courses)
+            else:
+                pending_courses.extend(courses)
+            i = j
+            continue
         if not line or BULLET.match(line):
             i += 1
             continue
@@ -219,15 +262,17 @@ def _parse_education(block: str) -> list[dict[str, Any]]:
             elif " in " in degree and major_value:
                 degree_value, extra_major = [p.strip() for p in degree.split(" in ", 1)]
                 major_value = extra_major or major_value
-            entries.append(
-                {
-                    "institution": institution,
-                    "degree": degree_value,
-                    "major": major_value,
-                    "start": dates.group(1),
-                    "end": dates.group(2),
-                }
-            )
+            entry = {
+                "institution": institution,
+                "degree": degree_value,
+                "major": major_value,
+                "start": dates.group(1),
+                "end": dates.group(2),
+            }
+            if pending_courses:
+                entry["courses"] = pending_courses
+                pending_courses = []
+            entries.append(entry)
             i += 1
             if degree:
                 i += 1
@@ -236,16 +281,20 @@ def _parse_education(block: str) -> list[dict[str, Any]]:
             continue
         if " | " in line:
             parts = [p.strip() for p in re.split(r"\s*\|\s*", line) if p.strip()]
-            entries.append(
-                {
-                    "institution": parts[0] if parts else line,
-                    "degree": parts[1] if len(parts) > 1 else "",
-                    "major": parts[2] if len(parts) > 2 else "",
-                    "start": "",
-                    "end": "",
-                }
-            )
+            entry = {
+                "institution": parts[0] if parts else line,
+                "degree": parts[1] if len(parts) > 1 else "",
+                "major": parts[2] if len(parts) > 2 else "",
+                "start": "",
+                "end": "",
+            }
+            if pending_courses:
+                entry["courses"] = pending_courses
+                pending_courses = []
+            entries.append(entry)
         i += 1
+    if pending_courses and entries:
+        entries[-1].setdefault("courses", []).extend(pending_courses)
     return entries
 
 
@@ -590,10 +639,79 @@ def load_profile_file(path: str | Path) -> Profile:
     return Profile.from_dict(data or {})
 
 
+def _merge_education(
+    base: list[dict[str, Any]], override: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Merge parsed education into the existing rows field by field.
+
+    A PDF re-import must not erase curated data the parser cannot see (for
+    example a resume-forge course list), so existing values survive unless the
+    parsed row actually supplies a replacement.
+    """
+    def key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+    existing = {key(entry.get("institution")): dict(entry) for entry in base}
+    merged: list[dict[str, Any]] = []
+    for parsed in override:
+        current = existing.get(key(parsed.get("institution")))
+        if current is None:
+            merged.append(dict(parsed))
+            continue
+        for field, value in parsed.items():
+            if value not in (None, "", [], {}):
+                current[field] = value
+        if not current.get("courses") and parsed.get("courses"):
+            current["courses"] = list(parsed["courses"])
+        merged.append(current)
+    return merged
+
+
+def education_with_resume_courses(profile: Profile) -> list[dict[str, Any]]:
+    """Return education rows, filling missing courses from the source resume.
+
+    Profiles imported before course parsing existed still have an accurate
+    resume_path. This is a read-only fallback: it never writes to the profile,
+    so a tailored resume and the profile page can show the courses the original
+    PDF actually lists.
+    """
+    entries = [
+        dict(entry) for entry in (profile.education or []) if isinstance(entry, dict)
+    ]
+    if not entries or all(entry.get("courses") for entry in entries):
+        return entries
+    if not profile.resume_path:
+        return entries
+    path = Path(profile.resume_path)
+    if not path.is_file():
+        return entries
+    try:
+        parsed = profile_from_resume(path)
+    except Exception:  # noqa: BLE001 - display/render fallback only
+        return entries
+
+    def key(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+    by_institution = {key(entry.get("institution")): entry for entry in parsed.education}
+    for entry in entries:
+        if entry.get("courses"):
+            continue
+        match = by_institution.get(key(entry.get("institution")))
+        if match and match.get("courses"):
+            entry["courses"] = list(match["courses"])
+    return entries
+
+
 def merge_profiles(base: Profile, override: Profile) -> Profile:
     merged = Profile.from_dict(base.to_dict())
+    education = _merge_education(base.education, override.education)
     for field_name in Profile.__dataclass_fields__:
+        if field_name == "education":
+            continue
         value = getattr(override, field_name)
         if value not in (None, "", [], {}):
             setattr(merged, field_name, value)
+    if override.education:
+        merged.education = education
     return merged

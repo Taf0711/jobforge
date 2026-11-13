@@ -34,7 +34,9 @@ SKILLS: list[str] = [
     "Technical Writing", "Documentation", "Mentoring", "Cross-functional Collaboration",
     # security / other
     "OAuth", "JWT", "SSO", "Security", "Cryptography", "Networking", "TCP/IP", "HTTP",
-    "Operating Systems", "Computer Architecture", "Algorithms", "Data Structures",
+    "Operating Systems", "Computer Architecture", "Computer Networks", "Algorithms",
+    "Data Structures", "Microcontrollers", "NXP Microcontrollers",
+    "Verification Methodologies",
 ]
 
 ALIASES: dict[str, str] = {
@@ -47,6 +49,18 @@ ALIASES: dict[str, str] = {
     "c/c++": "C++",
     "cpp": "C++",
     "c plus plus": "C++",
+    "microcontroller": "Microcontrollers",
+    "microcontrollers": "Microcontrollers",
+    "mcu": "Microcontrollers",
+    "nxp": "NXP Microcontrollers",
+    "nxp microcontroller": "NXP Microcontrollers",
+    "nxp microcontrollers": "NXP Microcontrollers",
+    "verification methodology": "Verification Methodologies",
+    "verification methodologies": "Verification Methodologies",
+    "computer networking": "Computer Networks",
+    "computer networks": "Computer Networks",
+    "computer network": "Computer Networks",
+    "networks": "Networking",
     "postgres": "PostgreSQL",
     "postgresql": "PostgreSQL",
     "mysql": "MySQL",

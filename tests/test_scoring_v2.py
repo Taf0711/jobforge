@@ -124,6 +124,64 @@ def test_sr_abbreviation_triggers_senior_title_gate():
     assert any("Title level mismatch" in gap for gap in result.gaps)
 
 
+def test_master_verb_is_not_a_degree_floor():
+    job = _job(
+        """Software Engineering AMTS College Grad
+* Master our development process, culture and code base
+* College Grad with a CS background
+* Python experience
+""",
+        title="Software Engineering AMTS College Grad",
+    )
+    jd = parse_jd(job.description)
+    result = score_job(job, _profile(), _prefs(), scoring_v2=True)
+
+    assert jd.degree is None
+    assert result.gate_survival == 1.0
+    assert not any("Degree floor" in gap for gap in result.gaps)
+
+
+def test_required_degree_phrases_still_set_the_floor():
+    cases = {
+        "Bachelor's degree in Computer Science": "bachelors",
+        "B.S. in Computer Science": "bachelors",
+        "BS/MS in Computer Science": "bachelors",
+        "Master's degree in Computer Science": "masters",
+        "MS or PhD in Computer Science": "masters",
+        "PhD in Computer Science": "phd",
+        "Associate's degree in Computer Science": "associates",
+    }
+    for phrase, expected in cases.items():
+        jd = parse_jd(f"Requirements:\n- {phrase}\n- Python")
+        assert jd.degree == expected, phrase
+
+
+def test_preferred_degree_does_not_set_a_floor():
+    required = parse_jd(
+        "Requirements:\n- Bachelor's degree required; Master's preferred\n- Python"
+    )
+    preferred_only = parse_jd(
+        "Requirements:\n- Master's degree preferred\n- Python"
+    )
+
+    assert required.degree == "bachelors"
+    assert preferred_only.degree is None
+
+
+def test_amts_college_grad_is_not_a_level_mismatch():
+    preferences = Preferences(
+        titles=["Backend Engineer"],
+        locations=["Remote"],
+        experience_levels=["entry", "junior"],
+    )
+    for title in ("Software Engineering AMTS College Grad", "AMTS"):
+        job = _job("Requirements:\n- Python", title=title)
+        result = score_job(job, _profile(), preferences, scoring_v2=True)
+
+        assert result.gate_survival >= 0.85, title
+        assert not any("Title level mismatch" in gap for gap in result.gaps), title
+
+
 def test_year_ranges_use_the_floor_not_the_ceiling():
     jd = parse_jd("Requirements:\n- 2-12+ years of industry software engineering experience")
     assert jd.years_required == 2

@@ -1,6 +1,6 @@
 # Agent workbench (MCP preview)
 
-Profile-bound MCP tools for local agents. Read tools are the default. Optional scopes add memory, dashboard launch, scan/score/queue writes, and approval-gated resume or submission requests. The submission tool only creates a pending operation; a human must approve it in the dashboard. There is no unapproved submit path.
+Profile-bound MCP tools for local agents. Read tools are the default. Optional scopes add memory, dashboard launch, scan/import/score/queue writes, and approval-gated resume or submission requests. The submission tool only creates a pending operation; a human must approve it in the dashboard. There is no unapproved submit path.
 
 Status: protocol-tested preview. Host certification is not complete.
 
@@ -8,7 +8,7 @@ Status: protocol-tested preview. Host certification is not complete.
 
 ```bash
 jobforge integrations setup --profile 4 --client generic \
-  --scopes profile:resume_context,applications:summary,memory:read_write,proposals:create,scan:run,matches:write,queue:write,submission:request
+  --scopes profile:resume_context,applications:summary,memory:read_write,proposals:create,scan:run,jobs:write,email:write,matches:write,queue:write,submission:request
 jobforge integrations list
 ```
 
@@ -30,6 +30,8 @@ jobforge integrations list
 | `jobforge_remember/recall/forget` | `memory:read_write` | Profile-scoped notes |
 | `jobforge_dashboard/open_dashboard` | none | Local console URL |
 | `jobforge_scan` | `scan:run` | Scan configured sources or explicit known-ATS boards (for example `lever:palantir`); no arbitrary URLs |
+| `jobforge_import_job` | `jobs:write` | Store and quick-score one posting the host already fetched from any public site; JobForge never fetches the URL |
+| `jobforge_ingest_emails` | `email:write` | Classify/match employer messages the host already read through its own mail connector; forward-only status changes, no mailbox fetch |
 | `jobforge_score` | `matches:write` | Deep-score unscored/all/explicit/top jobs |
 | `jobforge_build_queue` | `queue:write` | Build a bounded supervised queue |
 | `jobforge_request_resume` | `proposals:create`, `profile:resume_context` | Pending human-approved render |

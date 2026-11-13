@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ application.company }} · Tracker · JobForge{% endblock %}
+{% block content %}
+<p class="muted small"><a href="/applications">← Applications</a></p>
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Application tracker</p>
+    <h1>{{ application.company }}</h1>
+    <p class="muted">{{ application.title }}{% if job and job.location %} · {{ job.location }}{% endif %}</p>
+  </div>
+  <div class="actions">
+    {% if application.resume_path %}<a class="button" href="/artifacts/{{ application.id }}/resume" target="_blank" rel="noopener">Open resume</a>{% endif %}
+    {% if application.job_id %}<a class="button" href="/jobs/{{ application.job_id }}">Job page</a>{% endif %}
+  </div>
+</section>
+
+<section class="grid-2">
+  <div class="panel">
+    <div class="panel-head"><h2>Stage</h2>{% if application.status_source == 'email' %}<span class="pill email-source">updated by email</span>{% endif %}</div>
+    <form method="post" action="/applications/{{ application.id }}/status" class="stack">
+      <input type="hidden" name="return_to" value="detail">
+      <label>Status
+        <select name="status">
+          {% for s in statuses %}<option value="{{ s }}" {{ 'selected' if application.status == s else '' }}>{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Note <span class="muted">(optional, stored in the timeline)</span>
+        <input name="note" maxlength="500" placeholder="Recruiter call booked for Tuesday">
+      </label>
+      <div class="actions"><button class="primary">Update stage</button></div>
+    </form>
+    <table class="compact"><tbody>
+      <tr><td>ATS</td><td>{{ application.ats or '—' }}</td></tr>
+      <tr><td>Created</td><td class="muted">{{ application.created_at[:16] }}</td></tr>
+      <tr><td>Submitted</td><td class="muted">{{ application.submitted_at[:16] if application.submitted_at else '—' }}</td></tr>
+      <tr><td>Updated</td><td class="muted">{{ application.updated_at[:16] }}</td></tr>
+      <tr><td>Last email</td><td class="muted">{{ application.last_email_at[:16] if application.last_email_at else '—' }}</td></tr>
+    </tbody></table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Next step</h2></div>
+    {% if application.status == 'draft' %}
+    <p>Tailor a resume, then open the review-only apply flow.</p>
+    <div class="actions"><a class="button" href="/jobs/{{ application.job_id }}">Prepare application</a></div>
+    {% elif application.status == 'prepared' %}
+    <p>The application is filled but not submitted. Review it and click Submit in the browser.</p>
+    {% elif application.status == 'submitted' %}
+    <p>Submitted. Wait for a confirmation, assessment, interview, or rejection. Email sync will advance the stage.</p>
+    {% elif application.status == 'screening' %}
+    <p>Assessment or screening stage. Complete it before the deadline and keep the confirmation email.</p>
+    {% elif application.status == 'interview' %}
+    <p>Interview stage. Re-read the job description, prepare examples, and confirm the time in the email thread.</p>
+    {% elif application.status == 'offer' %}
+    <p>Offer stage. Review compensation, start date, and the written offer before responding.</p>
+    {% elif application.status == 'rejected' %}
+    <p>Closed by the employer. Keep the message for the record; the company is blocked from duplicate applications.</p>
+    {% elif application.status == 'withdrawn' %}
+    <p>You withdrew. No further action is needed.</p>
+    {% else %}
+    <p>Review the timeline for the latest signal.</p>
+    {% endif %}
+    <h3>Email changes</h3>
+    <p class="muted">{{ application.email_change_count or 0 }} tracked email status change{{ '' if (application.email_change_count or 0) == 1 else 's' }}. Manual changes stay local to JobForge.</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>Timeline</h2><span class="muted">Newest first</span></div>
+  {% if timeline %}
+  <ol class="tracker-timeline">
+    {% for item in timeline %}
+    <li class="timeline-{{ item.kind }}">
+      <div class="timeline-mark" aria-hidden="true"></div>
+      <div class="timeline-body">
+        <div class="timeline-head">
+          <strong>{{ item.title }}</strong>
+          <time class="muted">{{ item.at[:16] if item.at else 'unknown time' }}</time>
+        </div>
+        <p>{{ item.detail|short(240) }}</p>
+        {% if item.kind == 'email' %}
+          {% set e = item.email %}
+          <div class="chips">
+            <span class="pill cat-{{ e.category }}">{{ e.category }}</span>
+            {% if e.status_before and e.status_after and e.status_before != e.status_after %}
+            <span class="pill good">{{ e.status_before }} → {{ e.status_after }}</span>
+            {% endif %}
+            {% if e.match_score %}<span class="pill">match {{ '%.0f'|format(e.match_score) }}</span>{% endif %}
+            {% if e.match_source == 'manual' %}<span class="pill">manual link</span>{% elif e.match_source == 'auto' %}<span class="pill">auto linked</span>{% endif %}
+            {% if e.message_id and e.message_id.startswith('host:') %}<span class="pill">via {{ e.message_id.split(':')[1] }}</span>{% endif %}
+          </div>
+          <p class="muted small">{{ e.sender|short(90) }}{% if e.match_reason %} · {{ e.match_reason|short(140) }}{% endif %}</p>
+          <form method="post" action="/email/{{ e.id }}/unlink" class="inline">
+            <button class="ghost">Unlink email</button>
+          </form>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">No events or matched emails yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

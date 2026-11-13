@@ -19,6 +19,7 @@ WARNING = "warning"
 
 REAPPLY_STATUSES = {
     ApplicationStatus.SUBMITTED.value,
+    ApplicationStatus.SCREENING.value,
     ApplicationStatus.INTERVIEW.value,
     ApplicationStatus.OFFER.value,
 }

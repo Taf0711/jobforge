@@ -280,6 +280,12 @@ def test_application_tracking_is_profile_scoped_and_uses_artifact_routes(
 
     assert client.get(f"/artifacts/{app_id}/screenshot").status_code == 200
 
+    artifact = client.get(f"/artifacts/{app_id}/resume")
+    assert artifact.status_code == 200
+    disposition = artifact.headers["content-disposition"]
+    assert disposition.startswith("inline;")
+    assert "_Resume.pdf" in disposition
+
     submitted = client.post(
         f"/applications/{app_id}/status",
         data={"status": "submitted"},
@@ -421,3 +427,205 @@ def test_api_status_identifies_the_live_store(tmp_path: Path):
     assert data["db_path"] == str(cfg.db_path)
     assert data["port"] == cfg.server.port
     assert data["pid"] > 0
+
+
+def test_import_job_url_route_stores_and_redirects(monkeypatch, tmp_path: Path):
+    from jobforge import services
+    from jobforge.models import Job
+
+    cfg, app, _ = _seed(tmp_path)
+    fetched = Job(
+        source="direct",
+        source_id="url-1",
+        company="URL Co",
+        title="URL Engineer",
+        location="Remote",
+        url="https://example.com/jobs/1",
+        apply_url="https://example.com/jobs/1",
+        description="Python, React, and SQL role for a new grad.",
+    )
+    monkeypatch.setattr(services, "fetch_job_url", lambda url: fetched)
+
+    client = TestClient(app)
+    response = client.post(
+        "/jobs/import-url",
+        data={"url": "https://example.com/jobs/1"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "/jobs/" in response.headers["location"]
+    conn = db.connect(cfg.db_path)
+    row = conn.execute("SELECT company, title FROM jobs WHERE source='direct'").fetchone()
+    conn.close()
+    assert row["company"] == "URL Co"
+    assert row["title"] == "URL Engineer"
+
+def test_application_tracker_links_email_and_shows_timeline(tmp_path: Path):
+    cfg, app, job_id = _seed(tmp_path)
+    conn = db.connect(cfg.db_path)
+    profile = db.get_active_profile(conn)
+    app_id = db.create_application(
+        conn,
+        Application(job_id=job_id, profile_id=profile.id, status="draft", ats="lever"),
+    )
+    from jobforge.models import EmailMessage
+
+    db.save_email(
+        conn,
+        EmailMessage(
+            message_id="<tracker@acme>",
+            sender="Acme Recruiting <no-reply@acme.com>",
+            subject="Application received",
+            body="Thank you for applying to the Engineer role at Acme. We received your application.",
+            received_at="2026-11-12T12:00:00+00:00",
+            category="confirmation",
+        ),
+    )
+    email_id = conn.execute("SELECT id FROM emails WHERE message_id='<tracker@acme>'").fetchone()["id"]
+    conn.close()
+
+    client = TestClient(app)
+    detail = client.get(f"/applications/{app_id}")
+    assert detail.status_code == 200
+    assert "Acme" in detail.text
+    assert "Timeline" in detail.text
+
+    inbox = client.get("/inbox")
+    assert inbox.status_code == 200
+    assert "Application received" in inbox.text
+
+    linked = client.post(
+        f"/email/{email_id}/link",
+        data={"application_id": str(app_id)},
+        follow_redirects=False,
+    )
+    assert linked.status_code == 303
+
+    conn = db.connect(cfg.db_path)
+    stored = db.get_application(conn, app_id)
+    assert stored.status == "submitted"
+    assert stored.status_source == "email"
+    email_row = db.get_email(conn, email_id)
+    assert email_row["application_id"] == app_id
+    assert email_row["match_source"] == "manual"
+    assert email_row["status_after"] == "submitted"
+    conn.close()
+
+    tracker = client.get("/applications")
+    assert "via email" in tracker.text
+    assert "Application received" in tracker.text
+
+    unlinked = client.post(f"/email/{email_id}/unlink", follow_redirects=False)
+    assert unlinked.status_code == 303
+    conn = db.connect(cfg.db_path)
+    assert db.get_email(conn, email_id)["match_source"] == "manual_ignore"
+    conn.close()
+
+def test_email_settings_save_never_writes_the_password(tmp_path: Path, monkeypatch):
+    import yaml
+
+    from jobforge.config import EmailConfig
+
+    monkeypatch.setenv("JOBFORGE_DISABLE_EMAIL_AUTO_POLL", "1")
+
+    cfg = _config(tmp_path)
+    cfg.email = EmailConfig(
+        enabled=False,
+        host="imap.example.com",
+        port=993,
+        username="",
+        secret_dir=str(tmp_path / "data" / "connections" / "email"),
+    )
+    cfg.config_path = tmp_path / "config.yml"
+    cfg.ensure_dirs()
+    app = create_app(cfg)
+    conn = db.connect(cfg.db_path)
+    profile_id = db.save_profile(conn, Profile(name="settings-test"))
+    db.set_active_profile(conn, profile_id)
+    db.setting_set(conn, "setup_complete", "1")
+    conn.close()
+
+    client = TestClient(app)
+    response = client.post(
+        "/settings/email",
+        data={
+            "enabled": "1",
+            "host": "imap.example.com",
+            "port": "993",
+            "username": "me@example.com",
+            "folder": "INBOX",
+            "lookback_days": "14",
+            "auto_poll": "1",
+            "poll_interval_minutes": "10",
+            "timeout_seconds": "20",
+            "status_window_days": "45",
+            "password": "",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    data = yaml.safe_load(cfg.config_path.read_text()) or {}
+    email = data["email"]
+    assert email["enabled"] is True
+    assert email["username"] == "me@example.com"
+    assert email["lookback_days"] == 14
+    assert "password" not in email
+    assert cfg.email.enabled is True
+    assert cfg.email.poll_interval_minutes == 10
+
+def test_work_authorization_save_and_rescore(tmp_path: Path):
+    cfg, app, _job_id = _seed(tmp_path)
+    client = TestClient(app)
+    saved = client.post(
+        "/profiles/work-auth",
+        data={
+            "us_citizen": "yes",
+            "itar_eligible": "no",
+            "clearance_eligible": "yes",
+            "authorized": "yes",
+            "needs_sponsorship": "no",
+            "clearance": "secret",
+            "gpa": "3.5",
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    conn = db.connect(cfg.db_path)
+    profile = db.get_active_profile(conn)
+    assert profile.work_auth["us_citizen"] is True
+    assert profile.work_auth["itar_eligible"] is False
+    assert profile.work_auth["clearance_eligible"] is True
+    assert profile.work_auth["authorized"] is True
+    assert profile.work_auth["needs_sponsorship"] is False
+    assert profile.work_auth["clearance"] == "secret"
+    assert profile.work_auth["gpa"] == 3.5
+    conn.close()
+
+    cleared = client.post(
+        "/profiles/work-auth",
+        data={
+            "us_citizen": "unknown",
+            "itar_eligible": "unknown",
+            "clearance_eligible": "unknown",
+            "authorized": "unknown",
+            "needs_sponsorship": "unknown",
+            "clearance": "",
+            "gpa": "",
+        },
+        follow_redirects=False,
+    )
+    assert cleared.status_code == 303
+    conn = db.connect(cfg.db_path)
+    profile = db.get_active_profile(conn)
+    for key in (
+        "us_citizen",
+        "itar_eligible",
+        "clearance_eligible",
+        "authorized",
+        "needs_sponsorship",
+        "clearance",
+        "gpa",
+    ):
+        assert key not in profile.work_auth
+    conn.close()

@@ -146,3 +146,33 @@ def test_project_bank_uses_resume_forge_template_and_stays_one_page(tmp_path: Pa
     assert result.cover_letter_path.endswith("cover_letter.pdf")
     assert Path(result.cover_letter_path).is_file()
     assert Path(result.cover_letter_path).stat().st_size > 500
+
+
+@pytest.mark.skipif(shutil.which("typst") is None, reason="typst not installed")
+def test_tailor_exports_a_copy_to_the_session_directory(tmp_path: Path):
+    from jobforge.tailoring.tailor import tailor_resume
+
+    export_dir = tmp_path / "resume_set"
+    export_dir.mkdir()
+    job = Job(
+        source="lever",
+        source_id="export-1",
+        company="Acme",
+        title="Backend Engineer",
+        description="Requirements:\n- Python\n- Docker",
+    )
+
+    result = tailor_resume(
+        PROFILE,
+        job,
+        tmp_path / "artifacts",
+        write_cover_letter=False,
+        export_dir=export_dir,
+    )
+
+    exported = Path(result.export_path)
+    assert exported.is_file()
+    assert exported.parent == export_dir
+    assert exported.name.startswith("Jane_Doe_")
+    assert exported.name.endswith("_Resume.pdf")
+    assert exported.read_bytes() == Path(result.pdf_path).read_bytes()

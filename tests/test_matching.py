@@ -99,7 +99,11 @@ def test_clearance_gate_nearly_zeroes_ineligible_score():
         location="Remote",
         description="Requirements:\n- Active security clearance required\n- Python experience",
     )
-    result = score_job(job, _profile(), Preferences(titles=["Software Engineer"], locations=["Remote"]))
+    result = score_job(
+        job,
+        _profile(work_auth={"authorized": True, "years_experience": 2, "clearance_eligible": False}),
+        Preferences(titles=["Software Engineer"], locations=["Remote"]),
+    )
     assert result.gate_survival == 0.02
     assert result.score < 2
 
@@ -121,7 +125,15 @@ def test_clearance_eligible_profile_gets_partial_survival():
 
 
 def test_citizenship_itar_and_gpa_gates():
-    profile = _profile(work_auth={"authorized": True, "years_experience": 2, "gpa": 3.0})
+    profile = _profile(
+        work_auth={
+            "authorized": True,
+            "years_experience": 2,
+            "gpa": 3.0,
+            "us_citizen": False,
+            "itar_eligible": False,
+        }
+    )
     preferences = Preferences(titles=["Software Engineer"], locations=["Remote"])
     citizenship = score_job(
         Job(
@@ -167,6 +179,58 @@ def test_citizenship_itar_and_gpa_gates():
         preferences,
     )
     assert gpa.gate_survival == 0.08
+
+
+def test_unknown_work_authorization_is_a_gap_not_a_zero():
+    profile = _profile(work_auth={"authorized": True, "years_experience": 2})
+    preferences = Preferences(titles=["Software Engineer"], locations=["Remote"])
+    citizenship = score_job(
+        Job(
+            id=7,
+            source="lever",
+            source_id="7",
+            company="Space Co",
+            title="Software Engineer",
+            location="Remote",
+            description="Requirements:\n- Must be a US citizen\n- Python",
+        ),
+        profile,
+        preferences,
+    )
+    assert citizenship.gate_survival == 1.0
+    assert any("citizenship required" in gap for gap in citizenship.gaps)
+
+    itar = score_job(
+        Job(
+            id=8,
+            source="lever",
+            source_id="8",
+            company="Space Co",
+            title="Software Engineer",
+            location="Remote",
+            description="Requirements:\n- ITAR position\n- Python",
+        ),
+        profile,
+        preferences,
+    )
+    assert itar.gate_survival == 1.0
+    assert any("ITAR eligibility required" in gap for gap in itar.gaps)
+
+    clearance = score_job(
+        Job(
+            id=9,
+            source="lever",
+            source_id="9",
+            company="Defense Co",
+            title="Software Engineer",
+            location="Remote",
+            description="Requirements:\n- Active security clearance required\n- Python",
+        ),
+        profile,
+        preferences,
+    )
+    assert clearance.gate_survival == 0.35
+    assert any("clearance eligibility not set" in gap for gap in clearance.gaps)
 
 
 def test_senior_title_penalty_for_entry_profile():
@@ -357,3 +421,96 @@ def test_direct_skills_list_evidence_is_thin_not_a_missing_gap():
     assert row.gap is False
     assert row.thin is True
     assert result.gaps == []
+
+
+def test_flattened_jd_with_inline_headings_is_parsed():
+    text = (
+        "We build cloud services for government customers. "
+        "Basic Qualifications: Experience with Python and Go. Experience with data structures. "
+        "Preferred Qualifications: Experience with AWS."
+    )
+    jd = parse_jd(text)
+    must = [row for row in jd.requirements if row["importance"] == "must"]
+    nice = [row for row in jd.requirements if row["importance"] == "nice"]
+    assert len(must) == 2
+    assert len(nice) == 1
+    assert {"Python", "Go"} <= set(must[0]["skills"])
+    assert nice[0]["skills"] == ["AWS"]
+
+
+def test_age_of_majority_is_not_an_experience_floor():
+    jd = parse_jd(
+        "Requirements:\n- Must be 18 years of age or older\n- Experience with Python and C++\n"
+    )
+    assert jd.years_required is None
+    assert jd.years_mentioned is False
+    assert jd.requirements
+
+
+def test_key_job_responsibilities_heading_is_recognized():
+    from jobforge.matching.jd import split_jd_sections
+
+    sections = split_jd_sections(
+        "About us\nWe build things.\nKey Job Responsibilities\nDesign scalable services\n"
+    )
+    assert "responsibilities" in sections
+    assert sections["responsibilities"] == "Design scalable services"
+
+
+def test_full_jd_retrieval_finds_tail_sections():
+    from jobforge.matching.retrieval import search_jd
+
+    text = (
+        "Requirements\n- Python and Go\n\n"
+        "Responsibilities\n- Build services\n\n"
+        + ("filler sentence about the team. " * 500)
+        + "\nPreferred Qualifications\n- Kubernetes and Terraform\n"
+    )
+    result = search_jd(text, "Kubernetes Terraform", limit=3)
+
+    assert result["total_chars"] == len(text)
+    assert any(section["section"] == "preferred" for section in result["sections"])
+    assert result["chunks"][0]["section"] == "preferred"
+    assert "Kubernetes" in result["chunks"][0]["text"]
+
+
+def test_full_jd_retrieval_does_not_confuse_master_verb_with_degree():
+    from jobforge.matching.retrieval import search_jd
+
+    text = (
+        "What You'll Do\n"
+        "- Master our development process, culture and code base\n\n"
+        "Minimum Qualifications\n"
+        "- College Grad with a CS background\n"
+    )
+    result = search_jd(text, "master's degree requirement", limit=2)
+
+    assert result["chunks"][0]["section"] == "requirements"
+    assert "College Grad" in result["chunks"][0]["text"]
+
+def test_parsed_jd_retains_every_recognized_section():
+    jd = parse_jd(
+        """About us
+We build cloud tools.
+
+What you'll do
+Build services with Python.
+
+Requirements
+3+ years of experience.
+Bachelor's degree in Computer Science.
+
+Preferred Qualifications
+Kubernetes and Terraform.
+
+Compensation
+$140,000 - $170,000
+"""
+    )
+
+    assert {"body", "responsibilities", "requirements", "preferred", "other"} <= set(
+        jd.sections
+    )
+    assert "Kubernetes" in jd.sections["preferred"]
+    assert "Build services" in jd.sections["responsibilities"]
+    assert "140,000" in jd.sections["other"]

@@ -326,6 +326,75 @@ def test_get_job_redacts_unsafe_urls_and_marks_description_untrusted(tmp_path: P
         conn.close()
 
 
+def test_get_job_description_query_searches_the_whole_posting(tmp_path: Path):
+    cfg, _profile_id, job_id, _app_id, instance_id, connection_id = _seed(tmp_path)
+    description = (
+        "Requirements:\n- Rust and Python\n\n"
+        + ("filler sentence about the team. " * 600)
+        + "\nPreferred Qualifications:\n- Kubernetes and Terraform\n"
+    )
+    conn = db.connect(cfg.db_path)
+    conn.execute("UPDATE jobs SET description=? WHERE id=?", (description, job_id))
+    conn.commit()
+    conn.close()
+
+    conn, context = _context(cfg, instance_id, connection_id)
+    try:
+        payload = call_tool(
+            context,
+            "jobforge_get_job",
+            {
+                "job_id": job_id,
+                "description_query": "Kubernetes Terraform",
+                "description_limit": 3,
+            },
+        )
+        assert payload["ok"] is True
+        data = payload["data"]
+        assert data["description_complete_searched"] is True
+        assert data["description_total_chars"] == len(description)
+        assert data["description_untrusted"] is True
+        assert any(
+            "Kubernetes" in excerpt["text"] for excerpt in data["description_excerpts"]
+        )
+        assert any(
+            section["section"] == "preferred" for section in data["description_sections"]
+        )
+        assert "description" not in data
+    finally:
+        conn.close()
+
+
+def test_get_job_description_offset_pages_the_full_posting(tmp_path: Path):
+    cfg, _profile_id, job_id, _app_id, instance_id, connection_id = _seed(tmp_path)
+    conn, context = _context(cfg, instance_id, connection_id)
+    try:
+        first = call_tool(
+            context,
+            "jobforge_get_job",
+            {"job_id": job_id, "include_description": True},
+        )
+        data = first["data"]
+        assert data["description_offset"] == 0
+        assert data["description_next_offset"] == 12_000
+        assert data["description_total_chars"] > 12_000
+
+        second = call_tool(
+            context,
+            "jobforge_get_job",
+            {
+                "job_id": job_id,
+                "include_description": True,
+                "description_offset": 12_000,
+            },
+        )
+        assert second["data"]["description_offset"] == 12_000
+        assert second["data"]["description"]
+        assert second["data"]["description_truncated"] is False
+    finally:
+        conn.close()
+
+
 def test_profile_projection_redacts_contact_details(tmp_path: Path):
     cfg, _profile_id, _job_id, _app_id, instance_id, connection_id = _seed(tmp_path)
     conn, context = _context(cfg, instance_id, connection_id)
@@ -403,7 +472,7 @@ def test_tool_list_marks_scope_availability(tmp_path: Path):
 def test_schema_v6_connections_export_and_delete(tmp_path: Path):
     cfg = _config(tmp_path)
     conn = db.connect(cfg.db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
     profile_id = db.save_profile(conn, Profile(name="schema"))
     instance = db.create_agent_instance(conn, "local")
     connection = db.create_agent_connection(
@@ -604,5 +673,156 @@ def test_search_jobs_is_scan_ranked_and_returns_scan_metadata(tmp_path: Path):
         assert first["competition_profile"] == "direct_ats"
         assert first["age_days"] == 2
         assert first["scan_reasons"] == ["new grad / entry", "remote USA"]
+    finally:
+        conn.close()
+
+def test_ingest_emails_links_and_advances_status(tmp_path: Path):
+    cfg, profile_id, job_id, app_id, instance_id, connection_id = _seed(tmp_path)
+    conn = db.connect(cfg.db_path)
+    writer = db.create_agent_connection(
+        conn,
+        instance_id=instance_id,
+        profile_id=profile_id,
+        client="generic",
+        label="email writer",
+        scopes=[
+            "jobs:read",
+            "matches:read",
+            "profile:resume_context",
+            "applications:summary",
+            "email:write",
+        ],
+    )
+    conn.close()
+    conn, context = _context(cfg, instance_id, str(writer["id"]))
+    try:
+        message = {
+            "message_id": "gmail-message-1",
+            "sender": "Company 1 Recruiting <jobs@company1.com>",
+            "subject": "Interview invitation for Backend Engineer 1",
+            "body": (
+                "We would like to schedule a call for the Backend Engineer 1 role "
+                "at Company 1."
+            ),
+            "received_at": "2026-11-12T12:00:00Z",
+        }
+        first = call_tool(
+            context,
+            "jobforge_ingest_emails",
+            {"provider": "gmail", "messages": [message]},
+        )
+        assert first["ok"] is True
+        assert first["data"]["status_changes"] == 1
+        assert first["data"]["provider"] == "gmail"
+        stored = db.get_application(conn, app_id)
+        assert stored.status == "interview"
+        assert stored.status_source == "email"
+        email = db.get_email(
+            conn,
+            int(
+                conn.execute(
+                    "SELECT id FROM emails WHERE message_id='host:gmail:gmail-message-1'"
+                ).fetchone()["id"]
+            ),
+        )
+        assert email["message_id"] == "host:gmail:gmail-message-1"
+        assert email["application_id"] == app_id
+
+        again = call_tool(
+            context,
+            "jobforge_ingest_emails",
+            {"provider": "gmail", "messages": [message]},
+        )
+        assert again["ok"] is True
+        assert again["data"]["status_changes"] == 0
+
+        dry_run = call_tool(
+            context,
+            "jobforge_ingest_emails",
+            {
+                "provider": "outlook",
+                "apply_status": False,
+                "messages": [
+                    {
+                        "message_id": "outlook-message-1",
+                        "sender": "Company 1 Recruiting <jobs@company1.com>",
+                        "subject": "Offer for Backend Engineer 1",
+                        "body": "We are pleased to offer you the Backend Engineer 1 role at Company 1.",
+                        "received_at": "2026-11-13T12:00:00Z",
+                    }
+                ],
+            },
+        )
+        assert dry_run["ok"] is True
+        assert dry_run["data"]["status_changes"] == 0
+        assert db.get_application(conn, app_id).status == "interview"
+
+        applied = call_tool(
+            context,
+            "jobforge_ingest_emails",
+            {
+                "provider": "outlook",
+                "messages": [
+                    {
+                        "message_id": "outlook-message-1",
+                        "sender": "Company 1 Recruiting <jobs@company1.com>",
+                        "subject": "Offer for Backend Engineer 1",
+                        "body": "We are pleased to offer you the Backend Engineer 1 role at Company 1.",
+                        "received_at": "2026-11-13T12:00:00Z",
+                    }
+                ],
+            },
+        )
+        assert applied["ok"] is True
+        assert applied["data"]["status_changes"] == 1
+        assert db.get_application(conn, app_id).status == "offer"
+    finally:
+        conn.close()
+
+    conn, context = _context(cfg, instance_id, connection_id)
+    try:
+        blocked = call_tool(
+            context,
+            "jobforge_ingest_emails",
+            {
+                "provider": "gmail",
+                "messages": [{"message_id": "blocked", "subject": "Update"}],
+            },
+        )
+        assert blocked["ok"] is False
+        assert blocked["error"]["code"] == "SCOPE_DENIED"
+    finally:
+        conn.close()
+
+def test_profile_work_authorization_section_is_exposed(tmp_path: Path):
+    cfg, profile_id, _job_id, _app_id, instance_id, connection_id = _seed(tmp_path)
+    conn = db.connect(cfg.db_path)
+    profile = db.get_profile(conn, profile_id)
+    profile.work_auth = {
+        "us_citizen": True,
+        "itar_eligible": True,
+        "clearance_eligible": True,
+        "clearance": "none",
+        "authorized": True,
+        "gpa": 3.5,
+        "private_note": "not exposed",
+    }
+    db.save_profile(conn, profile)
+    conn.close()
+    conn, context = _context(cfg, instance_id, connection_id)
+    try:
+        section = call_tool(
+            context, "jobforge_get_profile", {"section": "work_authorization"}
+        )
+        assert section["ok"] is True
+        work_auth = section["data"]["work_authorization"]
+        assert work_auth["us_citizen"] is True
+        assert work_auth["itar_eligible"] is True
+        assert work_auth["clearance"] == "none"
+        assert work_auth["gpa"] == 3.5
+        assert "private_note" not in work_auth
+
+        overview = call_tool(context, "jobforge_get_profile", {"section": "overview"})
+        assert overview["data"]["overview"]["work_authorization"]["us_citizen"] is True
     finally:
         conn.close()

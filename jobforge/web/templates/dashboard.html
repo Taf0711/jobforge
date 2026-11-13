@@ -34,6 +34,24 @@
           <a class="button primary" href="/operations/{{ operation.id }}">Review</a>
         </div>
         {% endfor %}
+        {% if email_tracker.unmatched %}
+        <div class="action-row">
+          <div class="action-copy">
+            <strong>{{ email_tracker.unmatched }} email{{ '' if email_tracker.unmatched == 1 else 's' }} need a match</strong>
+            <span>Review the inbox so status changes and interviews are not missed.</span>
+          </div>
+          <a class="button" href="/inbox?filter=unmatched">Review inbox</a>
+        </div>
+        {% endif %}
+        {% if email_tracker.recent_changes %}
+        <div class="action-row">
+          <div class="action-copy">
+            <strong>{{ email_tracker.recent_changes }} application stage change{{ '' if email_tracker.recent_changes == 1 else 's' }} from email</strong>
+            <span>Newest employer signals are in the tracker timeline.</span>
+          </div>
+          <a class="button" href="/inbox?filter=changed">See changes</a>
+        </div>
+        {% endif %}
         {% if next_queue_item %}
         <div class="action-row">
           <div class="action-copy">

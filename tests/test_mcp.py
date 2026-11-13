@@ -10,7 +10,7 @@ import yaml
 
 from jobforge import db
 from jobforge.config import Config, BrowserConfig, EmailConfig, LLMConfig, ServerConfig
-from jobforge.models import Job, MatchResult, Preferences, Profile
+from jobforge.models import Application, Job, MatchResult, Preferences, Profile
 
 pytest.importorskip("mcp")
 
@@ -128,6 +128,8 @@ def test_mcp_stdio_lists_tools_and_serves_reads(tmp_path: Path):
                 "jobforge_status",
                 "jobforge_search_jobs",
                 "jobforge_scan",
+                "jobforge_import_job",
+                "jobforge_ingest_emails",
                 "jobforge_score",
                 "jobforge_build_queue",
                 "jobforge_get_job",
@@ -168,6 +170,8 @@ def test_mcp_stdio_lists_tools_and_serves_reads(tmp_path: Path):
             assert by_name["jobforge_remember"].annotations.read_only_hint is False
             assert by_name["jobforge_forget"].annotations.destructive_hint is True
             assert by_name["jobforge_scan"].annotations.read_only_hint is False
+            assert by_name["jobforge_import_job"].annotations.read_only_hint is False
+            assert by_name["jobforge_ingest_emails"].annotations.read_only_hint is False
             assert by_name["jobforge_score"].annotations.read_only_hint is False
             assert by_name["jobforge_build_queue"].annotations.read_only_hint is False
             assert by_name["jobforge_request_submission"].annotations.read_only_hint is False
@@ -191,9 +195,35 @@ def test_mcp_stdio_lists_tools_and_serves_reads(tmp_path: Path):
             assert blocked_scan.is_error is True
             assert blocked_scan.structured_content["error"]["code"] == "SCOPE_DENIED"
 
+            blocked_import = await client.call_tool(
+                "jobforge_import_job",
+                {
+                    "title": "Backend Engineer",
+                    "company": "Other Co",
+                    "description": "Python role",
+                    "url": "https://example.com/jobs/blocked",
+                },
+            )
+            assert blocked_import.is_error is True
+            assert blocked_import.structured_content["error"]["code"] == "SCOPE_DENIED"
+
             search = await client.call_tool("jobforge_search_jobs", {"limit": 1})
             assert search.is_error is False
             assert search.structured_content["data"]["jobs"][0]["job_id"] == job_id
+
+            detail = await client.call_tool(
+                "jobforge_get_job",
+                {
+                    "job_id": job_id,
+                    "description_query": "Python platform",
+                    "description_limit": 2,
+                },
+            )
+            assert detail.is_error is False
+            data = detail.structured_content["data"]
+            assert data["description_complete_searched"] is True
+            assert data["description_total_chars"] > 13_000
+            assert any("Python" in item["text"] for item in data["description_excerpts"])
 
             filtered = await client.call_tool("jobforge_search_jobs", {"min_fit": 80})
             assert filtered.is_error is False
@@ -347,19 +377,52 @@ def test_mcp_memory_and_resume_request_require_explicit_scopes(tmp_path: Path):
             assert recalled.is_error is False
             assert recalled.structured_content["data"]["memories"][0]["value"] == "remote roles"
 
+            destination = tmp_path / "resume_set"
+            destination.mkdir()
             request = await client.call_tool(
                 "jobforge_request_resume",
-                {"job_id": job_id, "idempotency_key": "resume-test-1"},
+                {
+                    "job_id": job_id,
+                    "idempotency_key": "resume-test-1",
+                    "destination_dir": str(destination),
+                },
             )
             assert request.is_error is False
             data = request.structured_content["data"]
             assert data["state"] == "pending_approval"
+            assert data["destination_dir"] == str(destination.resolve())
             assert data["submission_performed_by_jobforge"] is False
             operation_id = data["operation_id"]
 
+            relative = await client.call_tool(
+                "jobforge_request_resume",
+                {
+                    "job_id": job_id,
+                    "idempotency_key": "resume-relative-dir",
+                    "destination_dir": "relative/path",
+                },
+            )
+            assert relative.is_error is True
+            assert relative.structured_content["error"]["code"] == "INVALID_ARGUMENT"
+
+            missing = await client.call_tool(
+                "jobforge_request_resume",
+                {
+                    "job_id": job_id,
+                    "idempotency_key": "resume-missing-dir",
+                    "destination_dir": str(tmp_path / "does-not-exist"),
+                },
+            )
+            assert missing.is_error is True
+            assert missing.structured_content["error"]["code"] == "INVALID_ARGUMENT"
+
             second = await client.call_tool(
                 "jobforge_request_resume",
-                {"job_id": job_id, "idempotency_key": "resume-test-1"},
+                {
+                    "job_id": job_id,
+                    "idempotency_key": "resume-test-1",
+                    "destination_dir": str(destination),
+                },
             )
             assert second.structured_content["data"]["operation_id"] == operation_id
 
@@ -402,6 +465,7 @@ def test_mcp_write_tools_are_scope_gated_and_profile_bound(tmp_path: Path):
             "jobs:read",
             "matches:read",
             "scan:run",
+            "jobs:write",
             "matches:write",
             "queue:write",
             "submission:request",
@@ -434,6 +498,7 @@ def test_mcp_write_tools_are_scope_gated_and_profile_bound(tmp_path: Path):
             capabilities = status.structured_content["data"]["capabilities"]
             assert capabilities["read_only"] is False
             assert capabilities["scan"] is True
+            assert capabilities["import"] is True
             assert capabilities["score"] is True
             assert capabilities["queue"] is True
             assert capabilities["submission"] is True
@@ -451,6 +516,51 @@ def test_mcp_write_tools_are_scope_gated_and_profile_bound(tmp_path: Path):
             queued = await client.call_tool("jobforge_build_queue", {"limit": 1})
             assert queued.is_error is False
             assert queued.structured_content["data"]["items"][0]["job_id"] == job_id
+
+            imported = await client.call_tool(
+                "jobforge_import_job",
+                {
+                    "title": "Platform Engineer",
+                    "company": "Wildcard Co",
+                    "description": "Requirements:\n- Python\n- Docker\nBuild platform services.",
+                    "url": "https://wildcard.example/jobs/42?utm_source=agent#apply",
+                    "location": "Remote",
+                    "source": "wildcard",
+                },
+            )
+            assert imported.is_error is False
+            imported_data = imported.structured_content["data"]
+            assert imported_data["created"] is True
+            assert imported_data["url"] == "https://wildcard.example/jobs/42"
+            assert imported_data["scan_score"] > 0
+            assert imported_data["next"] == "jobforge_score"
+
+            repeat = await client.call_tool(
+                "jobforge_import_job",
+                {
+                    "title": "Platform Engineer",
+                    "company": "Wildcard Co",
+                    "description": "Requirements:\n- Python\n- Docker\nBuild platform services.",
+                    "url": "https://wildcard.example/jobs/42?utm_source=other",
+                    "location": "Remote",
+                    "source": "wildcard",
+                },
+            )
+            assert repeat.is_error is False
+            assert repeat.structured_content["data"]["created"] is False
+            assert repeat.structured_content["data"]["job_id"] == imported_data["job_id"]
+
+            blocked_url = await client.call_tool(
+                "jobforge_import_job",
+                {
+                    "title": "Bad URL",
+                    "company": "Bad Co",
+                    "description": "No",
+                    "url": "http://127.0.0.1/apply",
+                },
+            )
+            assert blocked_url.is_error is True
+            assert blocked_url.structured_content["error"]["code"] == "INVALID_ARGUMENT"
 
             requested = await client.call_tool(
                 "jobforge_request_submission",
@@ -577,3 +687,70 @@ def test_mcp_queue_refuses_a_shared_queue_from_another_profile(tmp_path: Path):
             assert result.structured_content["error"]["code"] == "PROFILE_QUEUE_CONFLICT"
 
     asyncio.run(exercise())
+
+
+def test_mcp_ingests_host_email_with_scope(tmp_path: Path):
+    from mcp import Client
+    from mcp.client.stdio import StdioServerParameters
+
+    config_path, instance_id, connection_id, job_id = _seed(tmp_path)
+    conn = db.connect(tmp_path / "data" / "jobforge.sqlite3")
+    profile = db.get_active_profile(conn)
+    app_id = db.create_application(
+        conn,
+        Application(job_id=job_id, profile_id=profile.id, status="prepared", ats="greenhouse"),
+    )
+    writer = db.create_agent_connection(
+        conn,
+        instance_id=instance_id,
+        profile_id=profile.id,
+        client="generic",
+        label="email writer",
+        scopes=["jobs:read", "applications:summary", "email:write"],
+    )
+    conn.close()
+    repo = Path(__file__).resolve().parents[1]
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-m",
+            "jobforge",
+            "--config",
+            str(config_path),
+            "mcp",
+            "serve",
+            "--connection",
+            str(writer["id"]),
+            "--instance",
+            instance_id,
+        ],
+        cwd=str(repo),
+    )
+
+    async def exercise() -> None:
+        async with Client(params) as client:
+            status = await client.call_tool("jobforge_status", {})
+            assert status.structured_content["data"]["capabilities"]["email_ingest"] is True
+            result = await client.call_tool(
+                "jobforge_ingest_emails",
+                {
+                    "provider": "gmail",
+                    "messages": [
+                        {
+                            "message_id": "gmail-1",
+                            "sender": "MCP Co Recruiting <jobs@mcpco.example>",
+                            "subject": "Interview invitation",
+                            "body": "We would like to schedule a call for the Backend Engineer role at MCP Co.",
+                            "received_at": "2026-11-12T12:00:00Z",
+                        }
+                    ],
+                },
+            )
+            assert result.is_error is False
+            assert result.structured_content["data"]["status_changes"] == 1
+            assert result.structured_content["data"]["provider"] == "gmail"
+
+    asyncio.run(exercise())
+    conn = db.connect(tmp_path / "data" / "jobforge.sqlite3")
+    assert db.get_application(conn, app_id).status == "interview"
+    conn.close()
